@@ -1,0 +1,1101 @@
+<script>
+/* ============================================================
+   Estado y utilidades
+   ============================================================ */
+var S = {
+  token: null,
+  modo: null,          // CREDENCIAL | GOOGLE | MIXTO
+  politica: null,
+  base: null,          // respuesta de arranque()
+  vista: null,
+  tablero: null,
+  seleccion: {},
+  pendientes: {},
+  ultimaCelda: null
+};
+
+var ABREV = {
+  TRABAJO: 'T', DESCANSO: 'D', VACACIONES: 'VAC', DESCANSO_MEDICO: 'DM',
+  COMPENSATORIO: 'CMP', CUMPLEANIOS: 'CPL', CAPACITACION: 'CAP', LICENCIA: 'LIC'
+};
+var MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto',
+             'Septiembre','Octubre','Noviembre','Diciembre'];
+
+function $(id) { return document.getElementById(id); }
+function esc(v) {
+  return String(v === null || v === undefined ? '' : v)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function clave(idPersonal, fecha) { return idPersonal + '|' + fecha; }
+
+function guardarToken(t) {
+  S.token = t;
+  try { if (t) { sessionStorage.setItem('tk_turnos', t); } else { sessionStorage.removeItem('tk_turnos'); } }
+  catch (ignore) {}
+}
+function recuperarToken() {
+  try { return sessionStorage.getItem('tk_turnos'); } catch (ignore) { return null; }
+}
+
+/** Llamada al servidor. Si la sesión cayó, devuelve al acceso sin perder el mensaje. */
+function api(accion, datos) {
+  return new Promise(function (resolver, rechazar) {
+    google.script.run
+      .withSuccessHandler(function (r) {
+        if (r && r.ok) { resolver(r.datos); return; }
+        var err = new Error((r && r.error) || 'Error desconocido');
+        if (r && r.sinSesion) {
+          err.sinSesion = true;
+          guardarToken(null);
+          mostrarAcceso(r.error);
+        }
+        rechazar(err);
+      })
+      .withFailureHandler(function (e) { rechazar(e); })
+      .api(accion, datos || {}, S.token);
+  });
+}
+
+function puede(modulo, accion) {
+  return !!(S.base && S.base.permisos && S.base.permisos[modulo] && S.base.permisos[modulo][accion]);
+}
+
+function mensaje(texto, tipo) {
+  var caja = document.createElement('div');
+  caja.className = 'mensaje ' + (tipo || 'ok');
+  caja.textContent = texto;
+  var cont = $('contenido');
+  cont.insertBefore(caja, cont.firstChild);
+  if (tipo !== 'error') { setTimeout(function () { caja.remove(); }, 4500); }
+}
+
+function alternarMenu() { $('lateral').classList.toggle('abierto'); }
+
+/* ============================================================
+   Acceso
+   ============================================================ */
+window.addEventListener('DOMContentLoaded', function () {
+  google.script.run
+    .withSuccessHandler(function (r) {
+      if (!r || !r.ok) { fatal('No se pudo contactar al servidor.'); return; }
+      S.modo = r.datos.modo;
+      S.politica = r.datos.politica;
+      document.title = r.datos.app;
+      S.token = recuperarToken();
+      entrarAlPanel(true);
+    })
+    .withFailureHandler(function (e) { fatal(e.message); })
+    .api('modoAcceso', {}, null);
+});
+
+function fatal(texto) {
+  $('arranque').className = '';
+  $('arranque').innerHTML = '<div class="puerta"><h2>No se pudo iniciar</h2><p>' + esc(texto) + '</p></div>';
+}
+
+/** Intenta cargar el panel. Si no hay sesión válida, muestra el acceso. */
+function entrarAlPanel(silencioso) {
+  api('arranque').then(function (d) {
+    S.base = d;
+    $('arranque').hidden = true;
+    $('acceso').hidden = true;
+    $('app').hidden = false;
+    $('marcaTitulo').textContent = d.app;
+    $('sesionNombre').textContent = d.usuario.nombre;
+    $('sesionCorreo').textContent = d.usuario.correo;
+    $('sesionNivel').textContent = d.usuario.etiquetaNivel.toUpperCase();
+    $('btnMiClave').hidden = (d.modoIdentidad === 'GOOGLE');
+    $('btnMiClave').onclick = abrirCambioClave;
+    $('btnSalir').onclick = salir;
+    pintarNav();
+    irA({ tipo: 'calendario' });
+  }).catch(function (err) {
+    if (err.sinSesion) { return; }              // mostrarAcceso ya se encargó
+    if (silencioso && S.modo !== 'GOOGLE') { mostrarAcceso(''); return; }
+    fatal(err.message);
+  });
+}
+
+function mostrarAcceso(aviso) {
+  $('arranque').hidden = true;
+  $('app').hidden = true;
+  var caja = $('acceso');
+  caja.hidden = false;
+  caja.innerHTML =
+    '<div class="acceso-caja">' +
+      '<div class="acceso-cab"><span class="eyebrow">PROGRAMACIÓN DE PERSONAL</span>' +
+        '<h1>Ingresar al sistema</h1></div>' +
+      '<div class="acceso-cuerpo">' +
+        '<div id="accesoMsg">' + (aviso ? '<div class="mensaje error">' + esc(aviso) + '</div>' : '') + '</div>' +
+        '<div class="campo"><label for="inUsuario">Usuario</label>' +
+          '<input id="inUsuario" type="text" autocomplete="username" autocapitalize="none" spellcheck="false"></div>' +
+        '<div class="campo"><label for="inClave">Contraseña</label>' +
+          '<div class="clave-caja"><input id="inClave" type="password" autocomplete="current-password">' +
+          '<button type="button" class="ver-clave" onclick="alternarClave(\'inClave\',this)">VER</button></div></div>' +
+        '<button class="btn primario" id="btnIngresar">Ingresar</button>' +
+      '</div>' +
+      '<div class="acceso-pie">Tras ' + S.politica.intentosMaximos + ' intentos fallidos la cuenta se bloquea ' +
+        S.politica.minutosBloqueo + ' minutos. La sesión caduca tras ' +
+        Math.round(S.politica.minutosSesion / 60) + ' horas sin actividad.</div>' +
+    '</div>';
+
+  $('btnIngresar').addEventListener('click', ingresar);
+  ['inUsuario', 'inClave'].forEach(function (id) {
+    $(id).addEventListener('keydown', function (e) { if (e.key === 'Enter') { ingresar(); } });
+  });
+  $('inUsuario').focus();
+}
+
+function alternarClave(id, btn) {
+  var campo = $(id);
+  campo.type = campo.type === 'password' ? 'text' : 'password';
+  btn.textContent = campo.type === 'password' ? 'VER' : 'OCULTAR';
+}
+
+function ingresar() {
+  var usuario = $('inUsuario').value.trim();
+  var clave = $('inClave').value;
+  var btn = $('btnIngresar');
+  btn.disabled = true;
+  btn.textContent = 'Verificando…';
+  $('accesoMsg').innerHTML = '';
+
+  google.script.run
+    .withSuccessHandler(function (r) {
+      btn.disabled = false;
+      btn.textContent = 'Ingresar';
+      if (!r || !r.ok) {
+        $('accesoMsg').innerHTML = '<div class="mensaje error">' + esc((r && r.error) || 'Error') + '</div>';
+        $('inClave').value = '';
+        $('inClave').focus();
+        return;
+      }
+      guardarToken(r.datos.token);
+      if (r.datos.debeCambiarClave) { pantallaCambioObligatorio(clave, r.datos.motivoCambio); }
+      else { entrarAlPanel(false); }
+    })
+    .withFailureHandler(function (e) {
+      btn.disabled = false;
+      btn.textContent = 'Ingresar';
+      $('accesoMsg').innerHTML = '<div class="mensaje error">' + esc(e.message) + '</div>';
+    })
+    .api('iniciarSesion', { usuario: usuario, clave: clave }, null);
+}
+
+function salir() {
+  api('cerrarSesion').catch(function () {}).then(function () {
+    guardarToken(null);
+    location.reload();
+  });
+}
+
+/* ---------- Política de contraseñas ---------- */
+function reglasClave() {
+  var p = S.politica, r = [];
+  r.push({ txt: 'Al menos ' + p.largoMinimo + ' caracteres', ok: function (c) { return c.length >= p.largoMinimo; } });
+  if (p.exigeMayuscula) { r.push({ txt: 'Una letra mayúscula', ok: function (c) { return /[A-ZÁÉÍÓÚÑ]/.test(c); } }); }
+  if (p.exigeMinuscula) { r.push({ txt: 'Una letra minúscula', ok: function (c) { return /[a-záéíóúñ]/.test(c); } }); }
+  if (p.exigeNumero) { r.push({ txt: 'Un número', ok: function (c) { return /[0-9]/.test(c); } }); }
+  if (p.exigeSimbolo) { r.push({ txt: 'Un símbolo', ok: function (c) { return /[^A-Za-z0-9]/.test(c); } }); }
+  return r;
+}
+
+function politicaHTML() {
+  return '<div class="politica"><ul id="listaPolitica">' +
+    reglasClave().map(function (r, i) { return '<li data-i="' + i + '">' + esc(r.txt) + '</li>'; }).join('') +
+    '</ul></div>';
+}
+
+function revisarPolitica(valor) {
+  var reglas = reglasClave();
+  var todas = true;
+  document.querySelectorAll('#listaPolitica li').forEach(function (li) {
+    var ok = reglas[Number(li.dataset.i)].ok(valor);
+    li.classList.toggle('cumple', ok);
+    if (!ok) { todas = false; }
+  });
+  return todas;
+}
+
+function pantallaCambioObligatorio(claveActual, motivo) {
+  var caja = $('acceso');
+  caja.hidden = false;
+  $('app').hidden = true;
+  caja.innerHTML =
+    '<div class="acceso-caja">' +
+      '<div class="acceso-cab"><span class="eyebrow">PRIMER INGRESO</span>' +
+        '<h1>Define tu contraseña</h1></div>' +
+      '<div class="acceso-cuerpo">' +
+        '<div id="accesoMsg">' + (motivo ? '<p class="pista" style="margin-top:0">' + esc(motivo) + '</p>' : '') + '</div>' +
+        politicaHTML() +
+        '<div class="campo"><label for="inNueva">Nueva contraseña</label>' +
+          '<div class="clave-caja"><input id="inNueva" type="password" autocomplete="new-password">' +
+          '<button type="button" class="ver-clave" onclick="alternarClave(\'inNueva\',this)">VER</button></div></div>' +
+        '<div class="campo"><label for="inRepite">Repite la contraseña</label>' +
+          '<input id="inRepite" type="password" autocomplete="new-password"></div>' +
+        '<button class="btn primario" id="btnGuardarClave">Guardar y continuar</button>' +
+      '</div>' +
+    '</div>';
+
+  $('inNueva').addEventListener('input', function () { revisarPolitica(this.value); });
+  $('inRepite').addEventListener('keydown', function (e) { if (e.key === 'Enter') { $('btnGuardarClave').click(); } });
+  revisarPolitica('');
+
+  $('btnGuardarClave').addEventListener('click', function () {
+    var nueva = $('inNueva').value, repite = $('inRepite').value;
+    if (!revisarPolitica(nueva)) {
+      $('accesoMsg').innerHTML = '<div class="mensaje error">La contraseña no cumple todos los requisitos.</div>';
+      return;
+    }
+    if (nueva !== repite) {
+      $('accesoMsg').innerHTML = '<div class="mensaje error">Las dos contraseñas no coinciden.</div>';
+      return;
+    }
+    this.disabled = true;
+    var btn = this;
+    api('cambiarClave', { actual: claveActual, nueva: nueva }).then(function () {
+      entrarAlPanel(false);
+    }).catch(function (e) {
+      btn.disabled = false;
+      $('accesoMsg').innerHTML = '<div class="mensaje error">' + esc(e.message) + '</div>';
+    });
+  });
+  $('inNueva').focus();
+}
+
+/** Cambio voluntario, desde el panel lateral. */
+function abrirCambioClave() {
+  $('panelHost').innerHTML =
+    '<div class="velo" onclick="cerrarPanel()"></div>' +
+    '<div class="panel" role="dialog" aria-modal="true">' +
+      '<header><h3>Cambiar mi contraseña</h3></header>' +
+      '<div class="cuerpo"><div id="formError"></div>' +
+        politicaHTML() +
+        '<div class="campo"><label for="cActual">Contraseña actual</label>' +
+          '<input id="cActual" type="password" autocomplete="current-password"></div>' +
+        '<div class="campo"><label for="cNueva">Nueva contraseña</label>' +
+          '<div class="clave-caja"><input id="cNueva" type="password" autocomplete="new-password">' +
+          '<button type="button" class="ver-clave" onclick="alternarClave(\'cNueva\',this)">VER</button></div></div>' +
+        '<div class="campo"><label for="cRepite">Repite la nueva</label>' +
+          '<input id="cRepite" type="password" autocomplete="new-password"></div>' +
+      '</div>' +
+      '<div class="pie"><button class="btn primario" id="btnCambiar">Guardar</button>' +
+        '<button class="btn" onclick="cerrarPanel()">Cancelar</button></div>' +
+    '</div>';
+
+  $('cNueva').addEventListener('input', function () { revisarPolitica(this.value); });
+  revisarPolitica('');
+  $('btnCambiar').addEventListener('click', function () {
+    if (!revisarPolitica($('cNueva').value)) { errorFormulario('La nueva contraseña no cumple los requisitos.'); return; }
+    if ($('cNueva').value !== $('cRepite').value) { errorFormulario('Las dos contraseñas no coinciden.'); return; }
+    this.disabled = true;
+    var btn = this;
+    api('cambiarClave', { actual: $('cActual').value, nueva: $('cNueva').value }).then(function () {
+      cerrarPanel();
+      mensaje('Contraseña actualizada.');
+    }).catch(function (e) { btn.disabled = false; errorFormulario(e.message); });
+  });
+  document.addEventListener('keydown', escCierra);
+}
+
+/* ============================================================
+   Navegación
+   ============================================================ */
+function pintarNav() {
+  var nav = $('nav');
+  var grupos = { 'Ausencias': [], 'Maestros': [], 'Seguridad': [] };
+  Object.keys(S.base.tablas).forEach(function (k) {
+    var t = S.base.tablas[k];
+    if (k === 'CALENDARIO_PERSONAL' || k === 'AUDITORIA' || k === 'PERMISO') { return; }
+    if (t.grupo === 'Maestros' && (k === 'PERSONAL' || k === 'PERSONAL_AREA')) {
+      grupos.Maestros.push(t); return;
+    }
+    if (grupos[t.grupo]) { grupos[t.grupo].push(t); }
+  });
+
+  var html = '';
+  if (puede('CALENDARIO', 'VER')) {
+    html += '<div class="nav-grupo"><h2>Programación</h2>' +
+            '<button class="nav-item" data-vista="calendario">Calendario del mes</button></div>';
+  }
+
+  ['Ausencias', 'Maestros', 'Seguridad'].forEach(function (g) {
+    var items = grupos[g].slice();
+    var extras = '';
+    if (g === 'Seguridad') {
+      if (puede('PERMISOS', 'VER')) { extras += '<button class="nav-item" data-vista="permisos">Permisos</button>'; }
+      if (puede('AUDITORIA', 'VER')) { extras += '<button class="nav-item" data-vista="auditoria">Auditoría</button>'; }
+    }
+    if (!items.length && !extras) { return; }
+    html += '<div class="nav-grupo"><h2>' + g + '</h2>';
+    items.forEach(function (t) {
+      html += '<button class="nav-item" data-tabla="' + t.clave + '">' + esc(t.etiqueta) +
+              (t.editable ? '' : '<span class="marca-lectura">SOLO VER</span>') + '</button>';
+    });
+    html += extras + '</div>';
+  });
+
+  nav.innerHTML = html;
+  nav.querySelectorAll('.nav-item').forEach(function (b) {
+    b.addEventListener('click', function () {
+      $('lateral').classList.remove('abierto');
+      if (b.dataset.vista) { irA({ tipo: b.dataset.vista }); }
+      else { irA({ tipo: 'tabla', tabla: b.dataset.tabla }); }
+    });
+  });
+}
+
+function marcarNav() {
+  document.querySelectorAll('.nav-item').forEach(function (b) {
+    var activo = (S.vista.tipo === 'tabla' && b.dataset.tabla === S.vista.tabla) ||
+                 (S.vista.tipo !== 'tabla' && b.dataset.vista === S.vista.tipo);
+    b.setAttribute('aria-current', activo ? 'true' : 'false');
+  });
+}
+
+function irA(vista) {
+  S.vista = vista;
+  S.seleccion = {}; S.pendientes = {};
+  marcarNav();
+  if (vista.tipo === 'calendario') { vistaCalendario(); }
+  else if (vista.tipo === 'auditoria') { vistaAuditoria(); }
+  else if (vista.tipo === 'permisos') { vistaPermisos(); }
+  else { vistaTabla(vista.tabla); }
+}
+
+/* ============================================================
+   Vista: calendario
+   ============================================================ */
+function vistaCalendario() {
+  $('vistaGrupo').textContent = 'PROGRAMACIÓN';
+  $('vistaTitulo').textContent = 'Calendario del mes';
+
+  var areas = S.base.areas;
+  if (!areas.length) {
+    $('acciones').innerHTML = '';
+    $('contenido').innerHTML = '<div class="vacio"><p>Todavía no hay áreas activas.</p>' +
+      (puede('MAESTROS', 'CREAR')
+        ? '<button class="btn primario" onclick="irA({tipo:\'tabla\',tabla:\'AREA\'})">Registrar un área</button>'
+        : '<p class="pista">Pide al administrador que registre las áreas.</p>') + '</div>';
+    return;
+  }
+
+  var sel = S.calFiltro || { idArea: areas[0].id, anio: S.base.anio, mes: S.base.mes };
+  S.calFiltro = sel;
+  var anios = [];
+  for (var a = S.base.anio - 1; a <= S.base.anio + 1; a++) { anios.push(a); }
+
+  $('acciones').innerHTML =
+    '<select id="fArea">' + areas.map(function (x) {
+      return '<option value="' + x.id + '"' + (x.id === sel.idArea ? ' selected' : '') + '>' + esc(x.nombre) + '</option>';
+    }).join('') + '</select>' +
+    '<select id="fMes">' + MESES.map(function (m, i) {
+      return '<option value="' + (i + 1) + '"' + ((i + 1) === sel.mes ? ' selected' : '') + '>' + m + '</option>';
+    }).join('') + '</select>' +
+    '<select id="fAnio">' + anios.map(function (y) {
+      return '<option value="' + y + '"' + (y === sel.anio ? ' selected' : '') + '>' + y + '</option>';
+    }).join('') + '</select>' +
+    '<button class="btn" id="btnVer">Ver mes</button>';
+
+  ['fArea', 'fMes', 'fAnio'].forEach(function (id) { $(id).addEventListener('change', cargarTablero); });
+  $('btnVer').addEventListener('click', cargarTablero);
+  cargarTablero();
+}
+
+function cargarTablero() {
+  S.calFiltro = { idArea: $('fArea').value, mes: Number($('fMes').value), anio: Number($('fAnio').value) };
+  S.seleccion = {}; S.pendientes = {};
+  $('contenido').innerHTML = '<div class="cargando">Cargando programación…</div>';
+  api('tablero', S.calFiltro).then(function (t) {
+    S.tablero = t;
+    pintarTablero();
+  }).catch(function (e) {
+    if (!e.sinSesion) { $('contenido').innerHTML = '<div class="mensaje error">' + esc(e.message) + '</div>'; }
+  });
+}
+
+function pintarTablero() {
+  var t = S.tablero;
+  if (!t.filas.length) {
+    $('contenido').innerHTML = '<div class="vacio"><p>No hay personal asignado a esta área en el periodo.</p>' +
+      (puede('PERSONAL', 'CREAR')
+        ? '<button class="btn primario" onclick="irA({tipo:\'tabla\',tabla:\'PERSONAL_AREA\'})">Asignar personal al área</button>'
+        : '') + '</div>';
+    return;
+  }
+
+  var html = '';
+  if (t.puedeEditar) { html += barraPintado(t); }
+
+  html += '<div class="rejilla-marco"><table class="rejilla"><thead><tr><th class="persona">Personal</th>';
+  t.dias.forEach(function (f, i) {
+    html += '<th class="' + (t.finDeSemana[i] ? 'finde' : '') + '">' +
+      '<span class="dia-num">' + Number(f.substring(8, 10)) + '</span>' +
+      '<span class="dia-sem">' + t.diasSemana[i] + '</span></th>';
+  });
+  html += '</tr></thead><tbody>';
+
+  t.filas.forEach(function (fila) {
+    html += '<tr><th class="persona" title="Clic para seleccionar toda la fila" ' +
+            'onclick="seleccionarFila(\'' + fila.idPersonal + '\')">' + esc(fila.persona) + '</th>';
+    fila.celdas.forEach(function (c, i) { html += celdaHTML(fila, c, t.finDeSemana[i]); });
+    html += '</tr>';
+  });
+  html += '</tbody></table></div>';
+
+  html += '<div class="leyenda">' + t.tiposDia.map(function (td) {
+    return '<span><i style="background:' + td.color + '"></i>' + esc(td.nombre) + '</span>';
+  }).join('') + '<span><i style="background:repeating-linear-gradient(135deg,#6B7A8C 0 4px,#C4CBD4 4px 8px)"></i>' +
+    'Rayado = no programable</span></div>';
+
+  if (t.advertencias.length) {
+    html += '<div class="avisos"><div class="eyebrow" style="margin-bottom:8px">REVISAR ANTES DE PUBLICAR</div>' +
+      t.advertencias.slice(0, 40).map(function (a) {
+        return '<div class="aviso"><span class="mono">' + esc(a.fecha || '—') + '</span>' +
+               '<span><strong>' + esc(a.persona) + '</strong> · ' + esc(a.texto) + '</span></div>';
+      }).join('') + '</div>';
+  }
+
+  $('contenido').innerHTML = html;
+  if (t.puedeEditar) { enlazarBarraPintado(); }
+  document.querySelectorAll('.celda').forEach(function (b) {
+    b.addEventListener('click', function (ev) { clicCelda(b, ev); });
+  });
+  actualizarContadores();
+}
+
+function celdaHTML(fila, c, esFinde) {
+  var k = clave(fila.idPersonal, c.fecha);
+  var pend = S.pendientes[k];
+  var tipoNombre = pend ? nombreTipo(pend.idTipoDia) : c.tipo;
+  var idTurno = pend ? pend.idTurno : c.idTurno;
+
+  var texto = '';
+  if (tipoNombre === 'TRABAJO' && idTurno) { texto = abrevTurno(idTurno); }
+  else if (tipoNombre) { texto = ABREV[tipoNombre] || tipoNombre.substring(0, 3); }
+  else if (c.ausencia) { texto = ABREV[c.ausencia.tipo] || '·'; }
+
+  var color = colorTipo(tipoNombre) || (c.ausencia ? colorTipo(c.ausencia.tipo) : '') || '';
+  var clases = ['celda'];
+  if (!tipoNombre) { clases.push('vacia'); }
+  if (esFinde) { clases.push('finde'); }
+  if (c.bloqueada) { clases.push('bloqueada'); }
+  if (pend) { clases.push('pendiente'); }
+  if (S.seleccion[k]) { clases.push('sel'); }
+
+  var titulo = fila.persona + ' · ' + c.fecha +
+    (tipoNombre ? ' · ' + tipoNombre : ' · sin programar') +
+    (c.motivo ? ' · ' + c.motivo : '') + (c.estado ? ' · ' + c.estado : '');
+
+  return '<td class="' + clases.join(' ') + '" style="--motivo:' + (color || '#6B7A8C') + ';"' +
+    ' data-p="' + fila.idPersonal + '" data-f="' + c.fecha + '" data-id="' + esc(c.id) + '"' +
+    ' tabindex="0" title="' + esc(titulo) + '">' +
+    '<div class="chip" ' + (color && !c.bloqueada ? 'style="background:' + color + '"' : '') + '>' +
+    esc(texto) + '</div></td>';
+}
+
+function nombreTipo(id) {
+  var r = '';
+  S.tablero.tiposDia.forEach(function (t) { if (t.id === id) { r = t.nombre; } });
+  return r;
+}
+function colorTipo(nombre) {
+  var r = '';
+  S.tablero.tiposDia.forEach(function (t) { if (t.nombre === nombre) { r = t.color; } });
+  return r;
+}
+function abrevTurno(id) {
+  var r = '';
+  S.tablero.turnos.forEach(function (t) { if (t.id === id) { r = t.nombre.substring(0, 3).toUpperCase(); } });
+  return r || 'T';
+}
+
+function barraPintado(t) {
+  return '<div class="tarjeta" style="padding:12px;margin-bottom:14px;display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">' +
+    '<div><label for="pTipo">Tipo de día</label><select id="pTipo">' +
+      t.tiposDia.map(function (td) { return '<option value="' + td.id + '">' + esc(td.nombre) + '</option>'; }).join('') +
+    '</select></div>' +
+    '<div><label for="pTurno">Turno</label><select id="pTurno"><option value="">— sin turno —</option>' +
+      t.turnos.map(function (tu) {
+        return '<option value="' + tu.id + '">' + esc(tu.nombre) + ' (' + esc(tu.inicio) + '–' + esc(tu.fin) + ')</option>';
+      }).join('') +
+    '</select></div>' +
+    '<button class="btn" id="btnAplicar">Aplicar a la selección (<span id="nSel">0</span>)</button>' +
+    '<button class="btn" id="btnQuitar">Quitar selección</button>' +
+    '<div style="flex:1"></div>' +
+    '<button class="btn" id="btnPrellenar">Autocompletar mes</button>' +
+    (t.puedePublicar ? '<button class="btn" id="btnPublicar">Publicar mes</button>' : '') +
+    '<button class="btn primario" id="btnGuardar" disabled>Guardar cambios (<span id="nPend">0</span>)</button>' +
+    '</div>';
+}
+
+function enlazarBarraPintado() {
+  $('btnAplicar').addEventListener('click', aplicarASeleccion);
+  $('btnQuitar').addEventListener('click', function () { S.seleccion = {}; pintarTablero(); });
+  $('btnGuardar').addEventListener('click', guardarPendientes);
+  $('btnPrellenar').addEventListener('click', prellenar);
+  if ($('btnPublicar')) { $('btnPublicar').addEventListener('click', publicar); }
+}
+
+function clicCelda(td, ev) {
+  var k = clave(td.dataset.p, td.dataset.f);
+  if (ev.shiftKey && S.ultimaCelda && S.ultimaCelda.p === td.dataset.p) {
+    var celdas = Array.prototype.slice.call(document.querySelectorAll('.celda[data-p="' + td.dataset.p + '"]'));
+    var i1 = celdas.findIndex(function (c) { return c.dataset.f === S.ultimaCelda.f; });
+    var i2 = celdas.findIndex(function (c) { return c.dataset.f === td.dataset.f; });
+    for (var i = Math.min(i1, i2); i <= Math.max(i1, i2); i++) {
+      S.seleccion[clave(celdas[i].dataset.p, celdas[i].dataset.f)] = true;
+      celdas[i].classList.add('sel');
+    }
+  } else if (S.seleccion[k]) {
+    delete S.seleccion[k]; td.classList.remove('sel');
+  } else {
+    S.seleccion[k] = true; td.classList.add('sel');
+  }
+  S.ultimaCelda = { p: td.dataset.p, f: td.dataset.f };
+  actualizarContadores();
+}
+
+function seleccionarFila(idPersonal) {
+  var celdas = document.querySelectorAll('.celda[data-p="' + idPersonal + '"]');
+  var todas = Array.prototype.every.call(celdas, function (c) {
+    return S.seleccion[clave(c.dataset.p, c.dataset.f)];
+  });
+  celdas.forEach(function (c) {
+    var k = clave(c.dataset.p, c.dataset.f);
+    if (todas) { delete S.seleccion[k]; c.classList.remove('sel'); }
+    else { S.seleccion[k] = true; c.classList.add('sel'); }
+  });
+  actualizarContadores();
+}
+
+function actualizarContadores() {
+  if (!$('nSel')) { return; }
+  $('nSel').textContent = Object.keys(S.seleccion).length;
+  var n = Object.keys(S.pendientes).length;
+  $('nPend').textContent = n;
+  $('btnGuardar').disabled = (n === 0);
+}
+
+function aplicarASeleccion() {
+  var idTipo = $('pTipo').value, idTurno = $('pTurno').value;
+  var nombre = nombreTipo(idTipo);
+  if (nombre === 'TRABAJO' && !idTurno) {
+    mensaje('Elige un turno: un día de trabajo no puede quedar sin turno.', 'error');
+    return;
+  }
+  var mapaCeldas = {};
+  S.tablero.filas.forEach(function (f) {
+    f.celdas.forEach(function (c) { mapaCeldas[clave(f.idPersonal, c.fecha)] = c; });
+  });
+
+  var omitidas = 0;
+  Object.keys(S.seleccion).forEach(function (k) {
+    var c = mapaCeldas[k];
+    if (!c) { return; }
+    if (c.bloqueada && nombre === 'TRABAJO') { omitidas++; return; }
+    var partes = k.split('|');
+    S.pendientes[k] = { idPersonal: partes[0], fecha: partes[1], id: c.id,
+                        idTipoDia: idTipo, idTurno: nombre === 'TRABAJO' ? idTurno : '' };
+  });
+
+  S.seleccion = {};
+  pintarTablero();
+  if (omitidas) {
+    mensaje(omitidas + ' celda(s) no se marcaron como trabajo: la persona tiene una ausencia aprobada ese día.', 'error');
+  }
+}
+
+function guardarPendientes() {
+  var celdas = Object.keys(S.pendientes).map(function (k) { return S.pendientes[k]; });
+  $('btnGuardar').disabled = true;
+  api('guardarCeldas', { idArea: S.calFiltro.idArea, celdas: celdas }).then(function (r) {
+    S.pendientes = {};
+    cargarTablero();
+    setTimeout(function () {
+      mensaje('Guardado: ' + r.guardados + ' celda(s).' +
+        (r.fallos.length ? '\nRechazadas ' + r.fallos.length + ': ' +
+          r.fallos.slice(0, 5).map(function (f) { return f.fecha + ' — ' + f.error; }).join(' | ') : ''),
+        r.fallos.length ? 'error' : 'ok');
+    }, 400);
+  }).catch(function (e) {
+    if (!e.sinSesion) { mensaje(e.message, 'error'); $('btnGuardar').disabled = false; }
+  });
+}
+
+function prellenar() {
+  var idTurno = $('pTurno').value;
+  if (!confirm('Se completarán los días vacíos del mes: ausencias aprobadas con su tipo, fines de semana como descanso' +
+      (idTurno ? ' y el resto como trabajo en el turno elegido.' : ' (sin turno base, los días hábiles quedarán vacíos).') +
+      '\nLo ya programado no se modifica. ¿Continuar?')) { return; }
+  api('prellenar', { idArea: S.calFiltro.idArea, anio: S.calFiltro.anio, mes: S.calFiltro.mes, idTurno: idTurno })
+    .then(function (r) {
+      cargarTablero();
+      setTimeout(function () { mensaje('Se generaron ' + r.guardados + ' día(s).'); }, 400);
+    }).catch(function (e) { if (!e.sinSesion) { mensaje(e.message, 'error'); } });
+}
+
+function publicar() {
+  if (!confirm('Publicar el mes deja la programación visible como oficial. ¿Continuar?')) { return; }
+  api('publicar', { idArea: S.calFiltro.idArea, anio: S.calFiltro.anio, mes: S.calFiltro.mes })
+    .then(function (r) {
+      cargarTablero();
+      setTimeout(function () { mensaje('Publicado: ' + r.publicados + ' registro(s).'); }, 400);
+    }).catch(function (e) { if (!e.sinSesion) { mensaje(e.message, 'error'); } });
+}
+
+/* ============================================================
+   Vista: tabla genérica
+   ============================================================ */
+function vistaTabla(tabla) {
+  var def = S.base.tablas[tabla];
+  $('vistaGrupo').textContent = def.grupo.toUpperCase();
+  $('vistaTitulo').textContent = def.etiqueta;
+  $('acciones').innerHTML =
+    '<input id="buscar" type="search" placeholder="Buscar…" style="width:200px">' +
+    (def.puedeCrear ? '<button class="btn primario" id="btnNuevo">Agregar</button>' : '');
+  $('contenido').innerHTML = '<div class="cargando">Cargando registros…</div>';
+
+  api('listar', { tabla: tabla }).then(function (r) {
+    S.datos = r;
+    pintarTabla();
+    $('buscar').addEventListener('input', pintarTabla);
+    if ($('btnNuevo')) { $('btnNuevo').addEventListener('click', function () { abrirFormulario(tabla, null); }); }
+  }).catch(function (e) {
+    if (!e.sinSesion) { $('contenido').innerHTML = '<div class="mensaje error">' + esc(e.message) + '</div>'; }
+  });
+}
+
+function textoRef(campo, valor) {
+  var lista = (S.datos.etiquetas || {})[campo];
+  if (!lista) { return valor; }
+  for (var i = 0; i < lista.length; i++) { if (lista[i].id === valor) { return lista[i].texto; } }
+  return valor;
+}
+
+function pintarTabla() {
+  var def = S.base.tablas[S.datos.tabla];
+  var filtro = ($('buscar') && $('buscar').value || '').toLowerCase();
+  var campos = def.campos;
+
+  var filas = S.datos.filas.filter(function (r) {
+    if (!filtro) { return true; }
+    return def.campos.some(function (f) {
+      return String(textoRef(f.c, r[f.c]) || '').toLowerCase().indexOf(filtro) >= 0;
+    });
+  });
+
+  if (!filas.length) {
+    $('contenido').innerHTML = '<div class="vacio"><p>No hay registros que mostrar.</p>' +
+      (def.puedeCrear ? '<button class="btn primario" onclick="abrirFormulario(\'' + def.clave + '\',null)">Agregar el primero</button>' : '') +
+      '</div>';
+    return;
+  }
+
+  var html = '<div class="tarjeta"><table class="datos"><thead><tr>' +
+    campos.map(function (f) { return '<th>' + esc(f.c.replace(/_/g, ' ')) + '</th>'; }).join('') +
+    '</tr></thead><tbody>';
+
+  filas.forEach(function (r) {
+    html += '<tr data-id="' + esc(r[def.pk]) + '">' + campos.map(function (f) {
+      var v = r[f.c];
+      if (f.t === 'ref') { return '<td>' + esc(textoRef(f.c, v)) + '</td>'; }
+      if (def.estado === f.c) { return '<td>' + pastilla(v) + '</td>'; }
+      var clase = (f.t === 'fecha' || f.t === 'hora' || f.pk || f.t === 'numero') ? ' class="mono"' : '';
+      return '<td' + clase + '>' + esc(v) + '</td>';
+    }).join('') + '</tr>';
+  });
+  html += '</tbody></table></div>';
+  html += '<p class="pista" style="margin-top:10px">' + filas.length + ' registro(s)' +
+          (def.editable ? ' · haz clic en una fila para editarla' : ' · vista de solo lectura') + '</p>';
+
+  $('contenido').innerHTML = html;
+
+  if (def.editable || def.clave === 'USUARIO') {
+    document.querySelectorAll('table.datos tbody tr').forEach(function (tr) {
+      tr.addEventListener('click', function () {
+        var reg = S.datos.filas.filter(function (x) { return x[def.pk] === tr.dataset.id; })[0];
+        abrirFormulario(def.clave, reg);
+      });
+    });
+  }
+}
+
+function pastilla(v) {
+  var s = String(v || '').toUpperCase();
+  var clase = 'no';
+  if (s === 'ACTIVO' || s === 'ACTIVA' || s === 'APROBADO' || s === 'PUBLICADO' || s === 'SI' || s === 'OK') { clase = 'ok'; }
+  else if (s === 'PENDIENTE' || s === 'BORRADOR' || s === 'ABIERTA') { clase = 'alerta'; }
+  else if (s === 'RECHAZADO' || s === 'ANULADO' || s === 'BLOQUEADA' || s === 'DENEGADO') { clase = 'mal'; }
+  return '<span class="pastilla ' + clase + '">' + esc(s) + '</span>';
+}
+
+/* ============================================================
+   Formulario lateral
+   ============================================================ */
+function abrirFormulario(tabla, registro) {
+  var def = S.base.tablas[tabla];
+  var esNuevo = !registro;
+  if (esNuevo && !def.puedeCrear) { mensaje('No tienes permiso para crear en ' + def.etiqueta + '.', 'error'); return; }
+
+  var soloVer = !def.editable && !esNuevo;
+
+  var campos = def.campos.filter(function (f) { return !f.pk; }).map(function (f) {
+    var valor = registro ? registro[f.c] : '';
+    var id = 'f_' + f.c;
+    var etiqueta = '<label class="' + (f.req ? 'req' : '') + '" for="' + id + '">' +
+                   esc(f.c.replace(/_/g, ' ')) + '</label>';
+    var bloqueo = soloVer ? ' disabled' : '';
+    var control;
+
+    if (f.t === 'ref') {
+      var lista = (S.datos && S.datos.etiquetas && S.datos.etiquetas[f.c]) || [];
+      control = '<select id="' + id + '" data-campo="' + f.c + '"' + bloqueo + '><option value="">— elegir —</option>' +
+        lista.map(function (o) {
+          var inactivo = String(o.estado || '').toUpperCase() !== 'ACTIVO';
+          if (inactivo && o.id !== valor) { return ''; }
+          return '<option value="' + esc(o.id) + '"' + (o.id === valor ? ' selected' : '') + '>' +
+                 esc(o.texto) + (inactivo ? ' (inactivo)' : '') + '</option>';
+        }).join('') + '</select>';
+    } else if (f.t === 'lista') {
+      control = '<select id="' + id + '" data-campo="' + f.c + '"' + bloqueo + '>' +
+        (f.ops || []).map(function (o) {
+          return '<option value="' + esc(o) + '"' + (o === valor ? ' selected' : '') + '>' + esc(o) + '</option>';
+        }).join('') + '</select>';
+    } else if (f.t === 'textoLargo') {
+      control = '<textarea id="' + id + '" data-campo="' + f.c + '"' + bloqueo + '>' + esc(valor) + '</textarea>';
+    } else {
+      var tipoInput = f.t === 'fecha' ? 'date' : f.t === 'numero' ? 'number' :
+                      f.t === 'correo' ? 'email' : f.t === 'hora' ? 'time' : 'text';
+      control = '<input id="' + id + '" data-campo="' + f.c + '" type="' + tipoInput + '" value="' + esc(valor) + '"' +
+                (f.calculado ? ' readonly' : '') + bloqueo + '>';
+    }
+
+    var pista = f.calculado ? '<div class="pista">Lo calcula el sistema al guardar.</div>' : '';
+    return '<div class="campo">' + etiqueta + control + pista + '</div>';
+  }).join('');
+
+  var bloqueAcceso = (tabla === 'USUARIO' && !esNuevo && puede('SEGURIDAD', 'VER'))
+    ? '<div class="bloque-acceso" id="bloqueAcceso"><h4>Acceso al sistema</h4>' +
+      '<p class="pista" style="margin:0">Consultando…</p></div>'
+    : '';
+
+  $('panelHost').innerHTML =
+    '<div class="velo" onclick="cerrarPanel()"></div>' +
+    '<div class="panel" role="dialog" aria-modal="true">' +
+      '<header><h3>' + (esNuevo ? 'Nuevo registro' : (soloVer ? 'Detalle' : 'Editar')) + ' · ' + esc(def.etiqueta) + '</h3>' +
+        '<div style="flex:1"></div>' +
+        (esNuevo ? '' : '<span class="pastilla no">' + esc(registro[def.pk]) + '</span>') +
+      '</header>' +
+      '<div class="cuerpo"><div id="formError"></div>' + campos + bloqueAcceso + '</div>' +
+      '<div class="pie">' +
+        (soloVer ? '<button class="btn" onclick="cerrarPanel()">Cerrar</button>'
+                 : '<button class="btn primario" id="btnGuardarReg">Guardar</button>' +
+                   '<button class="btn" onclick="cerrarPanel()">Cancelar</button>') +
+        '<div style="flex:1"></div>' +
+        (!esNuevo && def.estado && def.puedeAnular ? '<button class="btn peligro" id="btnAnular">Dar de baja</button>' : '') +
+      '</div>' +
+    '</div>';
+
+  if ($('btnGuardarReg')) {
+    $('btnGuardarReg').addEventListener('click', function () { guardarRegistro(tabla, registro); });
+  }
+  if ($('btnAnular')) {
+    $('btnAnular').addEventListener('click', function () {
+      if (!confirm('Se marcará como inactivo o anulado. El registro no se borra y el cambio queda auditado. ¿Continuar?')) { return; }
+      api('anular', { tabla: tabla, id: registro[def.pk] }).then(function () {
+        cerrarPanel(); vistaTabla(tabla);
+      }).catch(function (e) { if (!e.sinSesion) { errorFormulario(e.message); } });
+    });
+  }
+  if (bloqueAcceso) { cargarBloqueAcceso(registro.IDUSUARIO); }
+  document.addEventListener('keydown', escCierra);
+}
+
+function escCierra(e) { if (e.key === 'Escape') { cerrarPanel(); } }
+function cerrarPanel() {
+  $('panelHost').innerHTML = '';
+  document.removeEventListener('keydown', escCierra);
+}
+function errorFormulario(texto) {
+  if (!$('formError')) { return; }
+  $('formError').innerHTML = '<div class="mensaje error">' + esc(texto) + '</div>';
+  $('formError').scrollIntoView({ block: 'nearest' });
+}
+
+function guardarRegistro(tabla, registro) {
+  var def = S.base.tablas[tabla];
+  var datos = {};
+  document.querySelectorAll('.panel [data-campo]').forEach(function (el) { datos[el.dataset.campo] = el.value; });
+  $('btnGuardarReg').disabled = true;
+
+  var promesa = registro
+    ? api('actualizar', { tabla: tabla, id: registro[def.pk], datos: datos })
+    : api('crear', { tabla: tabla, datos: datos });
+
+  promesa.then(function (creado) {
+    if (!registro && tabla === 'USUARIO' && puede('SEGURIDAD', 'ADMINISTRAR')) {
+      if (confirm('Usuario creado. ¿Generar ahora sus credenciales de acceso?')) {
+        generarCredencial(creado.IDUSUARIO, function () { cerrarPanel(); vistaTabla(tabla); });
+        return;
+      }
+    }
+    cerrarPanel();
+    vistaTabla(tabla);
+  }).catch(function (e) {
+    if (!e.sinSesion) { errorFormulario(e.message); $('btnGuardarReg').disabled = false; }
+  });
+}
+
+/* ============================================================
+   Acceso de un usuario (dentro del formulario de USUARIO)
+   ============================================================ */
+function cargarBloqueAcceso(idUsuario) {
+  api('accesoUsuario', { idUsuario: idUsuario }).then(function (a) {
+    var caja = $('bloqueAcceso');
+    if (!caja) { return; }
+    var admin = puede('SEGURIDAD', 'ADMINISTRAR');
+
+    if (!a.tiene) {
+      caja.innerHTML = '<h4>Acceso al sistema</h4>' +
+        '<p class="pista" style="margin:0 0 10px">Esta persona todavía no tiene usuario y contraseña.</p>' +
+        (admin ? '<button class="btn primario" id="btnCrearCred">Generar credenciales</button>'
+               : '<p class="pista" style="margin:0">Solo un administrador puede generarlas.</p>');
+      if (admin) {
+        $('btnCrearCred').addEventListener('click', function () { generarCredencial(idUsuario); });
+      }
+      return;
+    }
+
+    caja.innerHTML = '<h4>Acceso al sistema</h4><dl>' +
+      '<dt>Usuario</dt><dd>' + esc(a.usuarioLogin) + '</dd>' +
+      '<dt>Estado</dt><dd>' + pastilla(a.estado) + '</dd>' +
+      '<dt>Último ingreso</dt><dd>' + esc(a.ultimoAcceso || '—') + '</dd>' +
+      '<dt>Última clave</dt><dd>' + esc(String(a.fechaCambio || '').substring(0, 10) || '—') + '</dd>' +
+      '<dt>Sesiones abiertas</dt><dd>' + esc(a.sesionesAbiertas) + '</dd>' +
+      (a.bloqueadoHasta ? '<dt>Bloqueado hasta</dt><dd>' + esc(a.bloqueadoHasta) + '</dd>' : '') +
+      (String(a.debeCambiar).toUpperCase() === 'SI' ? '<dt>Pendiente</dt><dd>cambiar contraseña</dd>' : '') +
+      '</dl>' +
+      (admin ? '<div class="fila-btn">' +
+        '<button class="btn" id="btnReset">Restablecer contraseña</button>' +
+        (String(a.estado).toUpperCase() === 'BLOQUEADA' ? '<button class="btn" id="btnDesbloq">Desbloquear</button>' : '') +
+        (a.sesionesAbiertas > 0 ? '<button class="btn" id="btnCerrarSes">Cerrar sus sesiones</button>' : '') +
+        '<button class="btn" id="btnLogin">Cambiar usuario</button>' +
+        '</div>' : '');
+
+    if (!admin) { return; }
+    $('btnReset').addEventListener('click', function () {
+      if (!confirm('Se generará una contraseña temporal y se cerrarán sus sesiones abiertas. ¿Continuar?')) { return; }
+      generarCredencial(idUsuario);
+    });
+    if ($('btnDesbloq')) {
+      $('btnDesbloq').addEventListener('click', function () {
+        api('desbloquearUsuario', { idUsuario: idUsuario }).then(function () {
+          cargarBloqueAcceso(idUsuario);
+        }).catch(function (e) { errorFormulario(e.message); });
+      });
+    }
+    if ($('btnCerrarSes')) {
+      $('btnCerrarSes').addEventListener('click', function () {
+        api('cerrarSesionesUsuario', { idUsuario: idUsuario }).then(function (r) {
+          cargarBloqueAcceso(idUsuario);
+        }).catch(function (e) { errorFormulario(e.message); });
+      });
+    }
+    $('btnLogin').addEventListener('click', function () {
+      var nuevo = prompt('Nuevo usuario de acceso (4 a 30 caracteres, sin espacios):', a.usuarioLogin);
+      if (!nuevo) { return; }
+      api('cambiarLogin', { idUsuario: idUsuario, usuarioLogin: nuevo }).then(function () {
+        cargarBloqueAcceso(idUsuario);
+      }).catch(function (e) { errorFormulario(e.message); });
+    });
+  }).catch(function (e) {
+    if ($('bloqueAcceso')) {
+      $('bloqueAcceso').innerHTML = '<h4>Acceso al sistema</h4><p class="pista" style="margin:0">' + esc(e.message) + '</p>';
+    }
+  });
+}
+
+/** Genera o restablece la contraseña y la muestra una única vez. */
+function generarCredencial(idUsuario, alCerrar) {
+  api('restablecerClave', { idUsuario: idUsuario }).then(function (r) {
+    var caja = $('bloqueAcceso') || $('formError');
+    var html =
+      '<div class="credencial"><dl>' +
+        '<dt>Usuario</dt><dd>' + esc(r.usuarioLogin) + '</dd>' +
+        '<dt>Contraseña temporal</dt><dd>' + esc(r.claveTemporal) + '</dd>' +
+      '</dl><p>Anótala y entrégala por un canal seguro: no se puede volver a mostrar. ' +
+      'El sistema pedirá cambiarla en el primer ingreso.</p></div>';
+    if (caja) { caja.innerHTML = html + (caja.id === 'bloqueAcceso' ? '' : ''); }
+    if (alCerrar) {
+      var seguir = document.createElement('button');
+      seguir.className = 'btn primario';
+      seguir.textContent = 'Ya la copié, continuar';
+      seguir.addEventListener('click', alCerrar);
+      caja.appendChild(seguir);
+    }
+  }).catch(function (e) { errorFormulario(e.message); });
+}
+
+/* ============================================================
+   Vista: permisos
+   ============================================================ */
+function vistaPermisos() {
+  $('vistaGrupo').textContent = 'SEGURIDAD';
+  $('vistaTitulo').textContent = 'Permisos por nivel';
+  $('acciones').innerHTML = '';
+  $('contenido').innerHTML = '<div class="cargando">Cargando la matriz…</div>';
+
+  api('permisos').then(function (p) {
+    S.permisos = p;
+    var niveles = p.niveles.filter(function (n) { return !n.total; });
+    $('acciones').innerHTML =
+      '<select id="selNivel">' + p.niveles.map(function (n) {
+        return '<option value="' + n.clave + '"' + (n.total ? '' : '') + '>' + esc(n.etiqueta) + '</option>';
+      }).join('') + '</select>' +
+      (p.editable ? '<button class="btn primario" id="btnGuardarPerm" disabled>Guardar cambios</button>' : '');
+    $('selNivel').addEventListener('change', pintarMatriz);
+    if ($('btnGuardarPerm')) { $('btnGuardarPerm').addEventListener('click', guardarPermisos); }
+    pintarMatriz();
+  }).catch(function (e) {
+    if (!e.sinSesion) { $('contenido').innerHTML = '<div class="mensaje error">' + esc(e.message) + '</div>'; }
+  });
+}
+
+function pintarMatriz() {
+  var p = S.permisos;
+  var nivelClave = $('selNivel').value;
+  var nivel = p.niveles.filter(function (n) { return n.clave === nivelClave; })[0];
+  var acciones = ['VER', 'CREAR', 'EDITAR', 'ANULAR', 'PUBLICAR', 'ADMINISTRAR'];
+  var editable = p.editable && !nivel.total;
+
+  var html = '';
+  if (nivel.total) {
+    html += '<div class="aviso-admin"><span>El nivel <strong>' + esc(nivel.etiqueta) + '</strong> tiene acceso total a ' +
+      'todos los módulos y no se puede recortar. Es lo que garantiza que el sistema nunca quede sin alguien capaz de ' +
+      'reabrir permisos. Para limitar a una persona, cámbiale el nivel desde Usuarios.</span></div>';
+  }
+
+  html += '<div class="tarjeta"><div class="permisos-cab">' +
+    '<div><strong>' + esc(nivel.etiqueta) + '</strong>' +
+    '<p>' + esc(nivel.descripcion) + '</p></div></div>' +
+    '<table class="matriz"><thead><tr><th class="mod">Módulo</th>' +
+    acciones.map(function (a) { return '<th>' + a.charAt(0) + a.substring(1).toLowerCase() + '</th>'; }).join('') +
+    '</tr></thead><tbody>';
+
+  p.modulos.forEach(function (m) {
+    html += '<tr><td class="mod"><strong>' + esc(m.etiqueta) + '</strong><span>' + esc(m.nota) + '</span></td>';
+    acciones.forEach(function (a) {
+      if (m.acciones.indexOf(a) === -1) { html += '<td class="na">—</td>'; return; }
+      var marcado = !!(p.matriz[nivelClave] && p.matriz[nivelClave][m.clave] && p.matriz[nivelClave][m.clave][a]);
+      html += '<td><input type="checkbox" data-mod="' + m.clave + '" data-acc="' + a + '"' +
+              (marcado ? ' checked' : '') + (editable ? '' : ' disabled') +
+              ' aria-label="' + esc(a + ' en ' + m.etiqueta) + '"></td>';
+    });
+    html += '</tr>';
+  });
+  html += '</tbody></table></div>';
+  html += '<p class="pista" style="margin-top:10px">Cada casilla que cambies se registra en la auditoría con ' +
+          'el valor anterior y el nuevo. Los cambios se aplican en cuanto el usuario vuelve a cargar la aplicación.</p>';
+
+  $('contenido').innerHTML = html;
+
+  if (editable) {
+    document.querySelectorAll('.matriz input[type=checkbox]').forEach(function (c) {
+      c.addEventListener('change', function () {
+        // VER es la base: sin ver, no hay nada que hacer en el módulo.
+        if (c.dataset.acc !== 'VER' && c.checked) {
+          var ver = document.querySelector('.matriz input[data-mod="' + c.dataset.mod + '"][data-acc="VER"]');
+          if (ver && !ver.checked) { ver.checked = true; }
+        }
+        if (c.dataset.acc === 'VER' && !c.checked) {
+          document.querySelectorAll('.matriz input[data-mod="' + c.dataset.mod + '"]').forEach(function (o) {
+            if (o !== c) { o.checked = false; }
+          });
+        }
+        $('btnGuardarPerm').disabled = false;
+      });
+    });
+  }
+}
+
+function guardarPermisos() {
+  var nivel = $('selNivel').value;
+  var matriz = {};
+  document.querySelectorAll('.matriz input[type=checkbox]').forEach(function (c) {
+    if (!matriz[c.dataset.mod]) { matriz[c.dataset.mod] = {}; }
+    matriz[c.dataset.mod][c.dataset.acc] = c.checked;
+  });
+
+  $('btnGuardarPerm').disabled = true;
+  api('guardarPermisos', { nivel: nivel, matriz: matriz }).then(function (r) {
+    vistaPermisos();
+    setTimeout(function () { mensaje('Permisos actualizados: ' + r.cambios + ' cambio(s) registrados.'); }, 300);
+  }).catch(function (e) {
+    if (!e.sinSesion) { mensaje(e.message, 'error'); $('btnGuardarPerm').disabled = false; }
+  });
+}
+
+/* ============================================================
+   Vista: auditoría
+   ============================================================ */
+function vistaAuditoria() {
+  $('vistaGrupo').textContent = 'SEGURIDAD';
+  $('vistaTitulo').textContent = 'Auditoría de accesos y cambios';
+  var tablas = Object.keys(S.base.tablas);
+
+  $('acciones').innerHTML =
+    '<input id="aCorreo" type="search" placeholder="Correo o usuario" style="width:170px">' +
+    '<select id="aTabla"><option value="">Todas las tablas</option>' +
+      tablas.map(function (k) { return '<option value="' + k + '">' + esc(S.base.tablas[k].etiqueta) + '</option>'; }).join('') +
+      '<option value="CREDENCIAL">Credenciales</option><option value="SESION">Sesiones</option>' +
+    '</select>' +
+    '<select id="aAccion"><option value="">Toda acción</option>' +
+      ['INGRESO','SALIDA','ACCESO','CREAR','ACTUALIZAR','PERMISOS','CAMBIO_CLAVE','RESTABLECER_CLAVE',
+       'DESBLOQUEAR','EDICION_DIRECTA','PUBLICAR'].map(function (a) {
+        return '<option value="' + a + '">' + a.replace(/_/g, ' ') + '</option>';
+      }).join('') + '</select>' +
+    '<input id="aDesde" type="date" title="Desde"><input id="aHasta" type="date" title="Hasta">' +
+    '<button class="btn primario" id="btnFiltrar">Filtrar</button>';
+
+  $('btnFiltrar').addEventListener('click', cargarAuditoria);
+  cargarAuditoria();
+}
+
+function cargarAuditoria() {
+  $('contenido').innerHTML = '<div class="cargando">Consultando la traza…</div>';
+  var filtros = {
+    correo: $('aCorreo').value, tabla: $('aTabla').value, accion: $('aAccion').value,
+    desde: $('aDesde').value, hasta: $('aHasta').value, limite: 300
+  };
+  api('auditoria', { filtros: filtros }).then(function (filas) {
+    if (!filas.length) {
+      $('contenido').innerHTML = '<div class="vacio"><p>No hay movimientos con esos criterios.</p></div>';
+      return;
+    }
+    var html = '<div class="tarjeta"><table class="datos"><thead><tr>' +
+      '<th>Fecha y hora</th><th>Usuario</th><th>Nivel</th><th>Origen</th><th>Acción</th>' +
+      '<th>Tabla</th><th>Registro</th><th>Campo</th><th>Antes</th><th>Después</th><th>Resultado</th>' +
+      '</tr></thead><tbody>';
+    filas.forEach(function (r) {
+      html += '<tr style="cursor:default">' +
+        '<td class="mono">' + esc(r.FECHA_HORA) + '</td>' +
+        '<td>' + esc(r.CORREO) + '</td>' +
+        '<td class="mono">' + esc(r.NIVEL_ACCESO) + '</td>' +
+        '<td class="mono">' + esc(r.ORIGEN) + '</td>' +
+        '<td>' + esc(String(r.ACCION).replace(/_/g, ' ')) + '</td>' +
+        '<td class="mono">' + esc(r.TABLA) + '</td>' +
+        '<td class="mono">' + esc(r.ID_REGISTRO) + '</td>' +
+        '<td class="mono">' + esc(r.CAMPO) + '</td>' +
+        '<td>' + esc(String(r.VALOR_ANTERIOR).substring(0, 60)) + '</td>' +
+        '<td>' + esc(String(r.VALOR_NUEVO).substring(0, 60)) + '</td>' +
+        '<td>' + pastilla(r.RESULTADO) + '</td></tr>';
+    });
+    html += '</tbody></table></div><p class="pista" style="margin-top:10px">' +
+      filas.length + ' movimiento(s). ORIGEN indica si el cambio vino del panel (APP) o de editar la hoja a mano (HOJA).</p>';
+    $('contenido').innerHTML = html;
+  }).catch(function (e) {
+    if (!e.sinSesion) { $('contenido').innerHTML = '<div class="mensaje error">' + esc(e.message) + '</div>'; }
+  });
+}
+</script>
