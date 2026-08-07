@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <base target="_top">
+  <title><?= appName ?></title>
+  <?!= incluir('Estilos'); ?>
+  <?!= incluir('EstilosAcceso'); ?>
+</head>
+<body>
+
+  <div id="arranque" class="cargando">Verificando tu acceso…</div>
+
+  <!-- Pantalla de acceso: se arma desde Script.html -->
+  <div id="acceso" class="acceso" hidden></div>
+
+  <div class="app" id="app" hidden>
+    <aside class="lateral" id="lateral">
+      <div class="marca">
+        <h1 id="marcaTitulo">Turnos</h1>
+        <span>PROGRAMACIÓN DE PERSONAL</span>
+      </div>
+      <nav id="nav"></nav>
+      <div class="sesion">
+        <strong id="sesionNombre"></strong>
+        <div id="sesionCorreo" style="color:#8FA2B8"></div>
+        <span class="nivel" id="sesionNivel"></span>
+        <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn" id="btnMiClave" style="padding:3px 8px;font-size:11px">Cambiar contraseña</button>
+          <button class="btn" id="btnSalir" style="padding:3px 8px;font-size:11px">Salir</button>
+        </div>
+      </div>
+    </aside>
+
+    <main class="principal">
+      <div class="barra">
+        <button class="btn alternar-menu" onclick="alternarMenu()" aria-label="Abrir menú">☰</button>
+        <div>
+          <div class="eyebrow" id="vistaGrupo"></div>
+          <h2 id="vistaTitulo">Calendario</h2>
+        </div>
+        <div class="crece"></div>
+        <div id="acciones" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"></div>
+      </div>
+      <div class="contenido" id="contenido"></div>
+    </main>
+  </div>
+
+  <div id="panelHost"></div>
+
+  <?!= incluir('Script'); ?>
+</body>
+</html>
