@@ -1,4 +1,4 @@
- * 09_Permisos.gs
+/* 09_Permisos.gs
  * Matriz de permisos: qué puede hacer cada nivel en cada módulo.
  *
  * Regla dura del sistema: el nivel ADMIN siempre tiene acceso total y no se puede
