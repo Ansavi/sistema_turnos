@@ -60,13 +60,116 @@ function puede(modulo, accion) {
   return !!(S.base && S.base.permisos && S.base.permisos[modulo] && S.base.permisos[modulo][accion]);
 }
 
+/* ---------- Avisos no bloqueantes ---------- */
+
+/**
+ * Notificación discreta en una esquina. Reemplaza a los alert del navegador:
+ * informa sin interrumpir ni robar el foco de lo que la persona está haciendo.
+ */
 function mensaje(texto, tipo) {
-  var caja = document.createElement('div');
-  caja.className = 'mensaje ' + (tipo || 'ok');
-  caja.textContent = texto;
-  var cont = $('contenido');
-  cont.insertBefore(caja, cont.firstChild);
-  if (tipo !== 'error') { setTimeout(function () { caja.remove(); }, 4500); }
+  var pila = $('toasts');
+  if (!pila) {
+    pila = document.createElement('div');
+    pila.id = 'toasts';
+    pila.className = 'toasts';
+    pila.setAttribute('role', 'status');
+    pila.setAttribute('aria-live', 'polite');
+    document.body.appendChild(pila);
+  }
+
+  var t = document.createElement('div');
+  t.className = 'toast ' + (tipo || 'ok');
+  t.innerHTML = '<span class="toast-txt"></span>' +
+                '<button class="toast-x" aria-label="Cerrar aviso">✕</button>';
+  t.querySelector('.toast-txt').textContent = texto;
+  pila.appendChild(t);
+
+  var cerrar = function () {
+    t.classList.add('sale');
+    setTimeout(function () { t.remove(); }, 180);
+  };
+  t.querySelector('.toast-x').addEventListener('click', cerrar);
+  // Los errores se quedan hasta que la persona los cierre: suelen requerir una acción.
+  if (tipo !== 'error') { setTimeout(cerrar, 4500); }
+  return t;
+}
+
+/** Aviso persistente mientras dura una operación lenta. Devuelve su función de cierre. */
+function mensajeProgreso(texto) {
+  var t = mensaje(texto, 'proceso');
+  t.querySelector('.toast-x').remove();
+  return function () { t.remove(); };
+}
+
+/**
+ * Confirmación en modal propio, no bloqueante. Recibe un callback en lugar de
+ * devolver un booleano como confirm(): así el hilo del navegador nunca se detiene.
+ */
+function confirmar(opciones, alAceptar) {
+  var host = document.createElement('div');
+  host.className = 'modal-host';
+  host.innerHTML =
+    '<div class="modal-velo"></div>' +
+    '<div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTit">' +
+      '<h3 id="modalTit">' + esc(opciones.titulo) + '</h3>' +
+      '<p>' + esc(opciones.texto) + '</p>' +
+      (opciones.detalle ? '<p class="modal-detalle">' + esc(opciones.detalle) + '</p>' : '') +
+      '<div class="modal-pie">' +
+        '<button class="btn" data-accion="no">' + esc(opciones.cancelar || 'Cancelar') + '</button>' +
+        '<button class="btn ' + (opciones.peligro ? 'peligro-solido' : 'primario') + '" data-accion="si">' +
+          esc(opciones.aceptar || 'Confirmar') + '</button>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(host);
+
+  var cerrar = function () { document.removeEventListener('keydown', porTecla); host.remove(); };
+  var porTecla = function (e) { if (e.key === 'Escape') { cerrar(); } };
+  document.addEventListener('keydown', porTecla);
+
+  host.querySelector('.modal-velo').addEventListener('click', cerrar);
+  host.querySelector('[data-accion="no"]').addEventListener('click', cerrar);
+  host.querySelector('[data-accion="si"]').addEventListener('click', function () {
+    cerrar();
+    alAceptar();
+  });
+  host.querySelector('[data-accion="si"]').focus();
+}
+
+/** Equivalente de prompt() sin bloquear: pide un texto y lo entrega al callback. */
+function pedirTexto(opciones, alAceptar) {
+  var host = document.createElement('div');
+  host.className = 'modal-host';
+  host.innerHTML =
+    '<div class="modal-velo"></div>' +
+    '<div class="modal" role="dialog" aria-modal="true">' +
+      '<h3>' + esc(opciones.titulo) + '</h3>' +
+      (opciones.texto ? '<p>' + esc(opciones.texto) + '</p>' : '') +
+      '<div class="campo"><label for="modalIn">' + esc(opciones.etiqueta || 'Valor') + '</label>' +
+        '<input id="modalIn" type="text" value="' + esc(opciones.valor || '') + '"></div>' +
+      '<div class="modal-pie">' +
+        '<button class="btn" data-accion="no">Cancelar</button>' +
+        '<button class="btn primario" data-accion="si">' + esc(opciones.aceptar || 'Guardar') + '</button>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(host);
+
+  var cerrar = function () { document.removeEventListener('keydown', porTecla); host.remove(); };
+  var aceptar = function () {
+    var v = host.querySelector('#modalIn').value.trim();
+    cerrar();
+    if (v) { alAceptar(v); }
+  };
+  var porTecla = function (e) {
+    if (e.key === 'Escape') { cerrar(); }
+    if (e.key === 'Enter') { aceptar(); }
+  };
+  document.addEventListener('keydown', porTecla);
+
+  host.querySelector('.modal-velo').addEventListener('click', cerrar);
+  host.querySelector('[data-accion="no"]').addEventListener('click', cerrar);
+  host.querySelector('[data-accion="si"]').addEventListener('click', aceptar);
+  host.querySelector('#modalIn').focus();
+  host.querySelector('#modalIn').select();
 }
 
 function alternarMenu() { $('lateral').classList.toggle('abierto'); }
@@ -88,9 +191,19 @@ window.addEventListener('DOMContentLoaded', function () {
     .api('modoAcceso', {}, null);
 });
 
+/**
+ * Error irrecuperable. Muestra SIEMPRE el contenedor y oculta los demás:
+ * si no, el mensaje se escribe en un div con hidden y el usuario ve la pantalla
+ * anterior congelada, sin saber que algo falló.
+ */
 function fatal(texto) {
+  $('acceso').hidden = true;
+  $('app').hidden = true;
+  $('arranque').hidden = false;
   $('arranque').className = '';
-  $('arranque').innerHTML = '<div class="puerta"><h2>No se pudo iniciar</h2><p>' + esc(texto) + '</p></div>';
+  $('arranque').innerHTML =
+    '<div class="puerta"><h2>No se pudo iniciar</h2><p>' + esc(texto) + '</p>' +
+    '<button class="btn primario" onclick="location.reload()">Reintentar</button></div>';
 }
 
 /** Intenta cargar el panel. Si no hay sesión válida, muestra el acceso. */
@@ -251,12 +364,19 @@ function pantallaCambioObligatorio(claveActual, motivo) {
       $('accesoMsg').innerHTML = '<div class="mensaje error">Las dos contraseñas no coinciden.</div>';
       return;
     }
-    this.disabled = true;
     var btn = this;
+    btn.disabled = true;
+    btn.textContent = 'Guardando…';
+    // El cifrado de la contraseña tarda unos segundos: sin este aviso parece colgado.
+    $('accesoMsg').innerHTML = '<p class="pista" style="margin-top:0">Aplicando el cambio, ' +
+      'esto puede tardar unos segundos. No cierres la ventana.</p>';
+
     api('cambiarClave', { actual: claveActual, nueva: nueva }).then(function () {
       entrarAlPanel(false);
+      mensaje('Contraseña actualizada. Bienvenido.');
     }).catch(function (e) {
       btn.disabled = false;
+      btn.textContent = 'Guardar y continuar';
       $('accesoMsg').innerHTML = '<div class="mensaje error">' + esc(e.message) + '</div>';
     });
   });
@@ -288,12 +408,21 @@ function abrirCambioClave() {
   $('btnCambiar').addEventListener('click', function () {
     if (!revisarPolitica($('cNueva').value)) { errorFormulario('La nueva contraseña no cumple los requisitos.'); return; }
     if ($('cNueva').value !== $('cRepite').value) { errorFormulario('Las dos contraseñas no coinciden.'); return; }
-    this.disabled = true;
     var btn = this;
+    btn.disabled = true;
+    btn.textContent = 'Guardando…';
+    var cerrarAviso = mensajeProgreso('Aplicando el cambio de contraseña…');
+
     api('cambiarClave', { actual: $('cActual').value, nueva: $('cNueva').value }).then(function () {
+      cerrarAviso();
       cerrarPanel();
       mensaje('Contraseña actualizada.');
-    }).catch(function (e) { btn.disabled = false; errorFormulario(e.message); });
+    }).catch(function (e) {
+      cerrarAviso();
+      btn.disabled = false;
+      btn.textContent = 'Guardar';
+      errorFormulario(e.message);
+    });
   });
   document.addEventListener('keydown', escCierra);
 }
@@ -625,23 +754,44 @@ function guardarPendientes() {
 
 function prellenar() {
   var idTurno = $('pTurno').value;
-  if (!confirm('Se completarán los días vacíos del mes: ausencias aprobadas con su tipo, fines de semana como descanso' +
-      (idTurno ? ' y el resto como trabajo en el turno elegido.' : ' (sin turno base, los días hábiles quedarán vacíos).') +
-      '\nLo ya programado no se modifica. ¿Continuar?')) { return; }
-  api('prellenar', { idArea: S.calFiltro.idArea, anio: S.calFiltro.anio, mes: S.calFiltro.mes, idTurno: idTurno })
-    .then(function (r) {
-      cargarTablero();
-      setTimeout(function () { mensaje('Se generaron ' + r.guardados + ' día(s).'); }, 400);
-    }).catch(function (e) { if (!e.sinSesion) { mensaje(e.message, 'error'); } });
+  confirmar({
+    titulo: 'Autocompletar el mes',
+    texto: 'Se llenarán los días vacíos: las ausencias aprobadas con su tipo, los fines de semana como descanso' +
+           (idTurno ? ' y el resto como trabajo en el turno elegido.' : '. Sin turno base, los días hábiles quedarán vacíos.'),
+    detalle: 'Lo que ya está programado no se modifica.',
+    aceptar: 'Autocompletar'
+  }, function () {
+    var cerrar = mensajeProgreso('Generando la programación del mes…');
+    api('prellenar', { idArea: S.calFiltro.idArea, anio: S.calFiltro.anio, mes: S.calFiltro.mes, idTurno: idTurno })
+      .then(function (r) {
+        cerrar();
+        cargarTablero();
+        mensaje('Se generaron ' + r.guardados + ' día(s).');
+      }).catch(function (e) {
+        cerrar();
+        if (!e.sinSesion) { mensaje(e.message, 'error'); }
+      });
+  });
 }
 
 function publicar() {
-  if (!confirm('Publicar el mes deja la programación visible como oficial. ¿Continuar?')) { return; }
-  api('publicar', { idArea: S.calFiltro.idArea, anio: S.calFiltro.anio, mes: S.calFiltro.mes })
-    .then(function (r) {
-      cargarTablero();
-      setTimeout(function () { mensaje('Publicado: ' + r.publicados + ' registro(s).'); }, 400);
-    }).catch(function (e) { if (!e.sinSesion) { mensaje(e.message, 'error'); } });
+  confirmar({
+    titulo: 'Publicar el mes',
+    texto: 'La programación pasa de borrador a oficial y queda visible para todo el personal.',
+    detalle: 'Podrás seguir editándola después, pero cada cambio posterior quedará registrado en la auditoría.',
+    aceptar: 'Publicar'
+  }, function () {
+    var cerrar = mensajeProgreso('Publicando el mes…');
+    api('publicar', { idArea: S.calFiltro.idArea, anio: S.calFiltro.anio, mes: S.calFiltro.mes })
+      .then(function (r) {
+        cerrar();
+        cargarTablero();
+        mensaje('Publicado: ' + r.publicados + ' registro(s).');
+      }).catch(function (e) {
+        cerrar();
+        if (!e.sinSesion) { mensaje(e.message, 'error'); }
+      });
+  });
 }
 
 /* ============================================================
@@ -802,10 +952,18 @@ function abrirFormulario(tabla, registro) {
   }
   if ($('btnAnular')) {
     $('btnAnular').addEventListener('click', function () {
-      if (!confirm('Se marcará como inactivo o anulado. El registro no se borra y el cambio queda auditado. ¿Continuar?')) { return; }
-      api('anular', { tabla: tabla, id: registro[def.pk] }).then(function () {
-        cerrarPanel(); vistaTabla(tabla);
-      }).catch(function (e) { if (!e.sinSesion) { errorFormulario(e.message); } });
+      confirmar({
+        titulo: 'Dar de baja',
+        texto: 'El registro se marcará como inactivo o anulado y dejará de aparecer en los desplegables.',
+        detalle: 'No se borra nada: los datos y el historial se conservan, y el cambio queda auditado.',
+        aceptar: 'Dar de baja', peligro: true
+      }, function () {
+        api('anular', { tabla: tabla, id: registro[def.pk] }).then(function () {
+          cerrarPanel();
+          vistaTabla(tabla);
+          mensaje('Registro dado de baja.');
+        }).catch(function (e) { if (!e.sinSesion) { errorFormulario(e.message); } });
+      });
     });
   }
   if (bloqueAcceso) { cargarBloqueAcceso(registro.IDUSUARIO); }
@@ -835,13 +993,22 @@ function guardarRegistro(tabla, registro) {
 
   promesa.then(function (creado) {
     if (!registro && tabla === 'USUARIO' && puede('SEGURIDAD', 'ADMINISTRAR')) {
-      if (confirm('Usuario creado. ¿Generar ahora sus credenciales de acceso?')) {
+      confirmar({
+        titulo: 'Usuario creado',
+        texto: '¿Generar ahora sus credenciales de acceso?',
+        detalle: 'Se mostrará una contraseña temporal una sola vez, para que se la entregues.',
+        aceptar: 'Generar credenciales', cancelar: 'Más tarde'
+      }, function () {
         generarCredencial(creado.IDUSUARIO, function () { cerrarPanel(); vistaTabla(tabla); });
-        return;
-      }
+      });
+      // Si elige "Más tarde" el panel queda abierto: puede generarlas desde la ficha.
+      $('btnGuardarReg').disabled = false;
+      mensaje('Usuario guardado.');
+      return;
     }
     cerrarPanel();
     vistaTabla(tabla);
+    mensaje(registro ? 'Cambios guardados.' : 'Registro creado.');
   }).catch(function (e) {
     if (!e.sinSesion) { errorFormulario(e.message); $('btnGuardarReg').disabled = false; }
   });
@@ -885,13 +1052,18 @@ function cargarBloqueAcceso(idUsuario) {
 
     if (!admin) { return; }
     $('btnReset').addEventListener('click', function () {
-      if (!confirm('Se generará una contraseña temporal y se cerrarán sus sesiones abiertas. ¿Continuar?')) { return; }
-      generarCredencial(idUsuario);
+      confirmar({
+        titulo: 'Restablecer contraseña',
+        texto: 'Se generará una contraseña temporal y se cerrarán las sesiones abiertas de esta persona.',
+        detalle: 'Su contraseña actual dejará de funcionar de inmediato.',
+        aceptar: 'Restablecer', peligro: true
+      }, function () { generarCredencial(idUsuario); });
     });
     if ($('btnDesbloq')) {
       $('btnDesbloq').addEventListener('click', function () {
         api('desbloquearUsuario', { idUsuario: idUsuario }).then(function () {
           cargarBloqueAcceso(idUsuario);
+          mensaje('Cuenta desbloqueada.');
         }).catch(function (e) { errorFormulario(e.message); });
       });
     }
@@ -899,15 +1071,21 @@ function cargarBloqueAcceso(idUsuario) {
       $('btnCerrarSes').addEventListener('click', function () {
         api('cerrarSesionesUsuario', { idUsuario: idUsuario }).then(function (r) {
           cargarBloqueAcceso(idUsuario);
+          mensaje('Sesiones cerradas: ' + r.cerradas + '.');
         }).catch(function (e) { errorFormulario(e.message); });
       });
     }
     $('btnLogin').addEventListener('click', function () {
-      var nuevo = prompt('Nuevo usuario de acceso (4 a 30 caracteres, sin espacios):', a.usuarioLogin);
-      if (!nuevo) { return; }
-      api('cambiarLogin', { idUsuario: idUsuario, usuarioLogin: nuevo }).then(function () {
-        cargarBloqueAcceso(idUsuario);
-      }).catch(function (e) { errorFormulario(e.message); });
+      pedirTexto({
+        titulo: 'Cambiar usuario de acceso',
+        texto: 'De 4 a 30 caracteres: letras, números, punto, guion y guion bajo.',
+        etiqueta: 'Usuario', valor: a.usuarioLogin
+      }, function (nuevo) {
+        api('cambiarLogin', { idUsuario: idUsuario, usuarioLogin: nuevo }).then(function () {
+          cargarBloqueAcceso(idUsuario);
+          mensaje('Usuario de acceso actualizado.');
+        }).catch(function (e) { errorFormulario(e.message); });
+      });
     });
   }).catch(function (e) {
     if ($('bloqueAcceso')) {
