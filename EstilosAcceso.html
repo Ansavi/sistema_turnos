@@ -1,0 +1,95 @@
+<style>
+/* ---------- Pantalla de acceso ---------- */
+.acceso{
+  position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:20px;
+  background:var(--tinta);
+  /* La misma retícula de días del calendario, como fondo. */
+  background-image:
+    linear-gradient(rgba(255,255,255,.045) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(255,255,255,.045) 1px,transparent 1px);
+  background-size:34px 32px;
+  overflow:auto;
+}
+.acceso-caja{
+  width:100%;max-width:380px;background:var(--superficie);border-radius:var(--r);
+  border:1px solid #0E161E;box-shadow:0 18px 48px rgba(8,14,20,.45);overflow:hidden;
+}
+.acceso-cab{padding:22px 24px 18px;border-bottom:1px solid var(--linea)}
+.acceso-cab .eyebrow{
+  font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--texto-tenue);
+  text-transform:uppercase;display:block;margin-bottom:4px;
+}
+.acceso-cab h1{margin:0;font-size:19px;font-weight:600;letter-spacing:-.015em}
+.acceso-cuerpo{padding:20px 24px 24px}
+.acceso-cuerpo .campo{margin-bottom:14px}
+.acceso-cuerpo input{width:100%;padding:9px 10px}
+.acceso-cuerpo .btn{width:100%;padding:9px}
+.acceso-pie{
+  padding:12px 24px;background:#F7F9FB;border-top:1px solid var(--linea);
+  font-size:11px;color:var(--texto-tenue);
+}
+.clave-caja{position:relative}
+.clave-caja input{padding-right:64px}
+.ver-clave{
+  position:absolute;right:6px;top:50%;transform:translateY(-50%);
+  border:0;background:none;color:var(--acero);font-size:11px;font-weight:500;
+  cursor:pointer;padding:4px 6px;font-family:var(--mono);letter-spacing:.04em;
+}
+
+/* ---------- Requisitos de contraseña ---------- */
+.politica{margin:0 0 14px;padding:10px 12px;background:#F4F6F9;border-radius:var(--r);border:1px solid var(--linea-suave)}
+.politica ul{margin:0;padding-left:18px}
+.politica li{font-size:12px;color:var(--texto-tenue);margin:2px 0}
+.politica li.cumple{color:var(--verde)}
+.politica li.cumple::marker{content:'✓  '}
+
+/* ---------- Credenciales entregadas ---------- */
+.credencial{
+  border:1px dashed var(--acero);background:var(--acero-claro);border-radius:var(--r);
+  padding:14px;margin-bottom:14px;
+}
+.credencial dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:4px 14px;align-items:center}
+.credencial dt{font-size:11px;color:var(--texto-tenue);font-weight:500}
+.credencial dd{margin:0;font-family:var(--mono);font-size:15px;font-weight:600;color:var(--tinta);
+  user-select:all;letter-spacing:.02em}
+.credencial p{margin:10px 0 0;font-size:11px;color:#7A4A0A}
+
+/* ---------- Matriz de permisos ---------- */
+.permisos-cab{
+  display:flex;gap:14px;align-items:flex-start;padding:14px 16px;
+  background:#F4F6F9;border-bottom:1px solid var(--linea);
+}
+.permisos-cab p{margin:0;font-size:12px;color:var(--texto-tenue);max-width:60ch}
+table.matriz{width:100%;border-collapse:collapse;font-size:13px}
+table.matriz th{
+  padding:9px 10px;background:#F4F6F9;border-bottom:1px solid var(--linea);
+  font-family:var(--mono);font-size:10px;font-weight:500;letter-spacing:.08em;
+  color:var(--texto-tenue);text-transform:uppercase;text-align:center;
+}
+table.matriz th.mod{text-align:left;min-width:190px}
+table.matriz td{padding:8px 10px;border-bottom:1px solid var(--linea-suave);text-align:center}
+table.matriz td.mod{text-align:left}
+table.matriz td.mod strong{display:block;font-weight:600}
+table.matriz td.mod span{font-size:11px;color:var(--texto-tenue)}
+table.matriz tbody tr:hover{background:#F7F9FB}
+table.matriz input[type=checkbox]{width:16px;height:16px;accent-color:var(--acero);cursor:pointer}
+table.matriz td.na{color:#C3CBD5;font-family:var(--mono);font-size:11px}
+.aviso-admin{
+  display:flex;gap:10px;padding:10px 12px;border-left:3px solid var(--acero);
+  background:var(--acero-claro);border-radius:0 var(--r) var(--r) 0;margin-bottom:14px;font-size:13px;
+}
+
+/* ---------- Bloque de acceso dentro del formulario de usuario ---------- */
+.bloque-acceso{
+  border:1px solid var(--linea);border-radius:var(--r);padding:14px;margin-top:6px;background:#FAFBFC;
+}
+.bloque-acceso h4{
+  margin:0 0 10px;font-family:var(--mono);font-size:10px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--texto-tenue);font-weight:500;
+}
+.bloque-acceso dl{margin:0 0 12px;display:grid;grid-template-columns:auto 1fr;gap:3px 12px;font-size:12px}
+.bloque-acceso dt{color:var(--texto-tenue)}
+.bloque-acceso dd{margin:0;font-family:var(--mono);font-size:12px}
+.bloque-acceso .fila-btn{display:flex;gap:6px;flex-wrap:wrap}
+.bloque-acceso .btn{padding:5px 9px;font-size:12px}
+</style>
