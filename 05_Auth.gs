@@ -379,26 +379,46 @@ var Auth_ = {
 
     var errores = Politica_.validar(claveNueva, cred.USUARIO_LOGIN);
     if (errores.length) { throw new Error('La nueva contraseña no cumple la política:\n· ' + errores.join('\n· ')); }
-    if (Cripto_.iguales(Cripto_.derivar(claveNueva, cred.SALT, cred.ITERACIONES), cred.HASH)) {
-      throw new Error('La nueva contraseña debe ser distinta de la actual.');
-    }
 
     var historial = [];
     try { historial = JSON.parse(cred.HISTORIAL || '[]'); } catch (ignore) { historial = []; }
-    var repetida = historial.some(function (h) {
-      return Cripto_.iguales(Cripto_.derivar(claveNueva, h.salt, h.iter), h.hash);
-    });
-    if (repetida) {
-      throw new Error('No puedes reutilizar tus últimas ' + SEGURIDAD_().HISTORIAL_CLAVES + ' contraseñas.');
+
+    /**
+     * El salt se mantiene fijo durante la vida de la credencial (solo lo rota un
+     * restablecimiento). Así una sola derivación de la contraseña nueva sirve para
+     * compararla contra la actual y contra todo el historial: se pasa de 6 derivaciones
+     * a 2, y cambiar la contraseña deja de tardar el triple que un ingreso.
+     *
+     * El salt sigue siendo único por usuario, que es lo que impide precomputar tablas
+     * y comparar hashes entre personas. Compartirlo entre las contraseñas sucesivas de
+     * una misma persona solo revela si dos de ellas coinciden, que es justamente lo que
+     * aquí queremos detectar.
+     */
+    var salt = cred.SALT || Cripto_.salt();
+    var iter = Number(cred.ITERACIONES) || SEGURIDAD_().ITERACIONES;
+    var hashNueva = Cripto_.derivar(claveNueva, salt, iter);
+
+    if (Cripto_.iguales(hashNueva, cred.HASH)) {
+      throw new Error('La nueva contraseña debe ser distinta de la actual.');
     }
 
-    historial.unshift({ salt: cred.SALT, iter: Number(cred.ITERACIONES), hash: cred.HASH });
+    for (var i = 0; i < historial.length; i++) {
+      var h = historial[i];
+      // Formato actual: solo el hash. Formato antiguo: objeto con su propio salt.
+      var coincide = (typeof h === 'string')
+        ? Cripto_.iguales(hashNueva, h)
+        : Cripto_.iguales(Cripto_.derivar(claveNueva, h.salt, h.iter), h.hash);
+      if (coincide) {
+        throw new Error('No puedes reutilizar tus últimas ' +
+                        SEGURIDAD_().HISTORIAL_CLAVES + ' contraseñas.');
+      }
+    }
+
+    historial.unshift(cred.HASH);
     historial = historial.slice(0, SEGURIDAD_().HISTORIAL_CLAVES);
 
-    var salt = Cripto_.salt();
-    var iter = SEGURIDAD_().ITERACIONES;
     Seg_.guardar('CREDENCIAL', cred.IDCREDENCIAL, {
-      SALT: salt, ITERACIONES: iter, HASH: Cripto_.derivar(claveNueva, salt, iter),
+      SALT: salt, ITERACIONES: iter, HASH: hashNueva,
       HISTORIAL: JSON.stringify(historial), DEBE_CAMBIAR: 'NO',
       FECHA_CAMBIO: Utilidades_.ahora(), INTENTOS_FALLIDOS: 0, BLOQUEADO_HASTA: '',
       ESTADO_CREDENCIAL: 'ACTIVA'
@@ -570,4 +590,40 @@ function limpiarSesiones() {
     n++;
   });
   return n;
+}
+
+/**
+ * Calibración. Ejecútala desde el editor para saber cuánto cuesta realmente el
+ * hash en TU proyecto: el tiempo depende del entorno de Apps Script, no del código.
+ *
+ * Lee el resultado en el registro de ejecución y ajusta SEGURIDAD_().ITERACIONES:
+ * un ingreso debería tardar entre 1 y 2 segundos. Más que eso frustra al usuario;
+ * mucho menos, debilita la protección del hash.
+ */
+function medirCostoHash() {
+  var salt = Cripto_.salt();
+  var iter = SEGURIDAD_().ITERACIONES;
+
+  var t0 = new Date().getTime();
+  Cripto_.derivar('ContrasenaDePrueba123', salt, iter);
+  var unaDerivacion = new Date().getTime() - t0;
+
+  var texto =
+    'Iteraciones configuradas: ' + iter + '\n' +
+    'Una derivación: ' + unaDerivacion + ' ms\n' +
+    '\n' +
+    'Coste estimado por operación:\n' +
+    '  · Ingresar (1 derivación):        ' + unaDerivacion + ' ms\n' +
+    '  · Cambiar contraseña (' + (SEGURIDAD_().HISTORIAL_CLAVES + 2) + ' derivaciones): ' +
+        (unaDerivacion * (SEGURIDAD_().HISTORIAL_CLAVES + 2)) + ' ms\n' +
+    '\n' +
+    'Si el ingreso supera los 2000 ms, baja ITERACIONES en 01_Config.gs.\n' +
+    'Para apuntar a 1500 ms por ingreso, usa aproximadamente: ' +
+        Math.max(200, Math.round(iter * 1500 / Math.max(unaDerivacion, 1))) + ' iteraciones.';
+
+  console.log(texto);
+  try {
+    SpreadsheetApp.getUi().alert('Coste del hash', texto, SpreadsheetApp.getUi().ButtonSet.OK);
+  } catch (ignore) { /* ejecutado desde el editor */ }
+  return texto;
 }
