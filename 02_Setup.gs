@@ -222,6 +222,8 @@ function onOpen() {
     .addItem('Instalar / reparar estructura', 'instalar')
     .addItem('Generar día de cumpleaños del año', 'generarCumpleaniosDelAnio')
     .addSeparator()
+    .addItem('Verificar sistema', 'verificarSistema')
+    .addItem('Medir coste del cifrado', 'medirCostoHash')
     .addItem('Restablecer contraseña de administrador', 'restablecerClaveAdmin')
     .addToUi();
 }
