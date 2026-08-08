@@ -195,71 +195,16 @@ function registrarTriggers_() {
   }
 }
 
-/**
- * Recuperación: genera una contraseña temporal nueva para un administrador.
- * Se ejecuta desde el editor de Apps Script (o desde el menú de la hoja) cuando
- * nadie puede entrar al panel. Deja constancia en AUDITORIA.
- *
- * Uso normal: restablecerClaveAdmin()  → toma el primer usuario ADMIN activo.
- * Uso puntual: restablecerClaveAdmin('jperez') → indica el usuario de acceso.
- */
-function restablecerClaveAdmin(usuarioLogin) {
-  var cred;
-
-  if (usuarioLogin) {
-    cred = Db_.buscarPor('CREDENCIAL', 'USUARIO_LOGIN', String(usuarioLogin).trim().toLowerCase());
-    if (!cred) { throw new Error('No existe el usuario de acceso "' + usuarioLogin + '".'); }
-  } else {
-    var admins = Db_.leer('USUARIO').filter(function (u) {
-      return String(u.NIVEL_ACCESO).toUpperCase() === 'ADMIN' &&
-             String(u.ESTADO_USUARIO).toUpperCase() === 'ACTIVO';
-    });
-    if (!admins.length) { throw new Error('No hay ningún usuario con nivel ADMIN activo en la hoja USUARIO.'); }
-    cred = Db_.buscarPor('CREDENCIAL', 'IDUSUARIO', admins[0].IDUSUARIO);
-    if (!cred) {
-      // El administrador existe pero nunca tuvo credenciales: se las creamos.
-      cred = Seg_.crear('CREDENCIAL', {
-        IDUSUARIO: admins[0].IDUSUARIO, USUARIO_LOGIN: 'admin', HISTORIAL: '[]',
-        DEBE_CAMBIAR: 'SI', INTENTOS_FALLIDOS: 0, ESTADO_CREDENCIAL: 'ACTIVA',
-        OBSERVACIONES: 'Creada por restablecerClaveAdmin()'
-      });
-    }
-  }
-
-  var temporal = Politica_.temporal();
-  var salt = Cripto_.salt();
-  var iter = SEGURIDAD_().ITERACIONES;
-
-  Seg_.guardar('CREDENCIAL', cred.IDCREDENCIAL, {
-    SALT: salt, ITERACIONES: iter, HASH: Cripto_.derivar(temporal, salt, iter),
-    DEBE_CAMBIAR: 'SI', FECHA_CAMBIO: Utilidades_.ahora(),
-    INTENTOS_FALLIDOS: 0, BLOQUEADO_HASTA: '', ESTADO_CREDENCIAL: 'ACTIVA'
-  });
-
-  Auditoria_.registrar(
-    { correo: Session.getEffectiveUser().getEmail(), nivel: 'ADMIN', origen: 'MANTENIMIENTO' },
-    'RESTABLECER_CLAVE', 'CREDENCIAL', cred.IDCREDENCIAL, '', '', '', 'OK',
-    'Restablecida desde el editor para ' + cred.USUARIO_LOGIN);
-
-  var texto = 'Usuario: ' + cred.USUARIO_LOGIN + '\nContraseña temporal: ' + temporal +
-              '\n\nSe pedirá cambiarla al ingresar.';
-  console.log(texto);
-  try {
-    SpreadsheetApp.getUi().alert('Acceso restablecido', texto, SpreadsheetApp.getUi().ButtonSet.OK);
-  } catch (ignore) { /* ejecutado desde el editor: queda en el registro */ }
-
-  return texto;
-}
-
 /** Menú de apoyo dentro de la hoja de cálculo. */
 function onOpen() {
   SpreadsheetApp.getUi().createMenu(CONFIG_().APP)
     .addItem('Instalar / reparar estructura', 'instalar')
+    .addItem('Migrar a la versión 2', 'migrarAVersion2')
+    .addItem('Verificar sistema', 'verificarSistema')
+    .addSeparator()
     .addItem('Generar día de cumpleaños del año', 'generarCumpleaniosDelAnio')
     .addSeparator()
-    .addItem('Verificar sistema', 'verificarSistema')
-    .addItem('Migrar a la versión 2.0', 'migrarAVersion2')
-    .addItem('Medir coste del cifrado', 'medirCostoHash')
-    .addItem('Restablecer contraseña de administrador', 'restablecerClaveAdmin')
+    .addItem('Reparar acceso', 'repararAcceso')
+    .addItem('Restablecer sistema sin datos', 'restablecerSistema')
     .addToUi();
 }
