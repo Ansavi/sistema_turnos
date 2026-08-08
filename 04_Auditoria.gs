@@ -36,7 +36,17 @@ var Auditoria_ = {
 
   _recortar: function (v) {
     if (v === null || v === undefined) { return ''; }
-    var s = typeof v === 'object' ? JSON.stringify(v) : String(v);
+    var s;
+    if (typeof v === 'object') {
+      // En texto legible: la auditoría la lee una persona, no un programa.
+      var partes = [];
+      Object.keys(v).forEach(function (k) {
+        if (v[k] !== '' && v[k] !== null && v[k] !== undefined) { partes.push(k + ': ' + v[k]); }
+      });
+      s = partes.join(' · ');
+    } else {
+      s = String(v);
+    }
     return s.length > 800 ? s.substring(0, 797) + '...' : s;
   },
 
