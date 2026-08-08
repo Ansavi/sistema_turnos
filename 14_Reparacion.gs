@@ -24,16 +24,27 @@ function emergenciaAdmin() {
   var pasos = [];
   var anotar = function (t) { pasos.push('  ' + t); console.log(t); };
 
-  anotar('1. Reparando el orden de las columnas…');
-  var arregladas = repararOrdenColumnas(anotar);
+  /**
+   * Ya NO se reordenan columnas: la capa de datos mapea por nombre de encabezado,
+   * así que el orden de la hoja es indiferente. Borrar y reescribir hojas con datos
+   * reales para arreglar un problema de lectura era un riesgo innecesario.
+   */
+  anotar('1. Sincronizando las listas desplegables con sus columnas…');
+  var hojasValidadas = sincronizarValidaciones();
+  anotar('   ' + hojasValidadas.length + ' hoja(s) revisadas');
 
-  anotar('2. Reactivando al administrador…');
+  anotar('2. Revisando columnas faltantes…');
+  var arregladas = revisarColumnas_(anotar);
+
+  anotar('3. Reactivando al administrador…');
   var acceso = reactivarAdmin_(anotar);
 
   var texto = 'ACCESO DE EMERGENCIA\n' + '='.repeat(50) + '\n' +
               pasos.join('\n') + '\n' + '='.repeat(50) + '\n' +
-              'Hojas reordenadas: ' + arregladas.length +
-              (arregladas.length ? ' (' + arregladas.join(', ') + ')' : '') + '\n\n' +
+              (arregladas.length
+                ? 'Hojas con columnas faltantes: ' + arregladas.join(', ') +
+                  '\n(ejecuta migrarAVersion2 para completarlas)\n\n'
+                : 'Todas las hojas tienen sus columnas.\n\n') +
               (acceso
                 ? 'Usuario: ' + acceso.usuarioLogin + '\n' +
                   'Contraseña temporal: ' + acceso.claveTemporal + '\n\n' +
@@ -48,7 +59,83 @@ function emergenciaAdmin() {
 }
 
 /**
- * Reordena las columnas de cada hoja para que coincidan con el esquema.
+ * Reasigna las listas desplegables a la columna que les corresponde POR NOMBRE.
+ *
+ * Las reglas de validación viven pegadas a la posición de la columna, no a su
+ * encabezado. Si el orden de la hoja cambió, la lista de ESTADO_AREA puede haber
+ * quedado sobre COBERTURA_MINIMA y rechazar cualquier número que se escriba ahí.
+ *
+ * No toca ningún dato: solo reglas de validación.
+ */
+function sincronizarValidaciones() {
+  var ss = SS_();
+  var esquema = ESQUEMA_();
+  var ajustadas = [];
+
+  ORDEN_HOJAS_().forEach(function (clave) {
+    var def = esquema[clave];
+    var hoja = ss.getSheetByName(def.hoja);
+    if (!hoja) { return; }
+
+    var ancho = Math.max(hoja.getLastColumn(), 1);
+    var filas = Math.max(hoja.getMaxRows() - 1, 1);
+    var cabeceras = hoja.getRange(1, 1, 1, ancho).getValues()[0]
+                        .map(function (v) { return String(v).trim(); });
+
+    var porNombre = {};
+    def.campos.forEach(function (f) { porNombre[f.c] = f; });
+
+    var n = 0;
+    for (var col = 1; col <= ancho; col++) {
+      var campo = porNombre[cabeceras[col - 1]];
+      var rango = hoja.getRange(2, col, filas, 1);
+
+      if (campo && campo.t === 'lista' && campo.ops && campo.ops.length) {
+        rango.setDataValidation(
+          SpreadsheetApp.newDataValidation()
+            .requireValueInList(campo.ops, true)
+            .setAllowInvalid(false)
+            .setHelpText('Valores permitidos: ' + campo.ops.join(', '))
+            .build());
+      } else {
+        // Columna que no es de lista: no debe arrastrar reglas de otra época.
+        rango.clearDataValidations();
+      }
+      n++;
+    }
+    if (n) { ajustadas.push(def.hoja); }
+  });
+
+  SpreadsheetApp.flush();
+  console.log('Validaciones sincronizadas en ' + ajustadas.length + ' hoja(s).');
+  return ajustadas;
+}
+
+/**
+ * Informa si a alguna hoja le faltan columnas del esquema. No modifica nada.
+ * Con el acceso por nombre de encabezado, una columna ausente ya no corrompe la
+ * lectura: simplemente ese campo llega vacío. Pero conviene saberlo.
+ */
+function revisarColumnas_(anotar) {
+  anotar = anotar || function (t) { console.log(t); };
+  var incompletas = [];
+  ORDEN_HOJAS_().forEach(function (clave) {
+    var hoja = SS_().getSheetByName(ESQUEMA_()[clave].hoja);
+    if (!hoja) { anotar('   FALTA la hoja ' + ESQUEMA_()[clave].hoja); incompletas.push(clave); return; }
+    var faltan = Db_.columnasFaltantes(clave);
+    if (faltan.length) {
+      anotar('   ' + clave + ': faltan ' + faltan.join(', '));
+      incompletas.push(clave);
+    }
+  });
+  if (!incompletas.length) { anotar('   Todas las hojas tienen sus columnas.'); }
+  return incompletas;
+}
+
+/**
+ * Reordena físicamente las columnas para que coincidan con el esquema.
+ * OPCIONAL y solo cosmético: el sistema funciona con cualquier orden. Sirve para
+ * dejar las hojas legibles si alguien las consulta a mano.
  * Conserva todos los datos: los reubica según el NOMBRE del encabezado, no su
  * posición, así que ninguna celda cambia de significado.
  * Es seguro ejecutarla varias veces: si una hoja ya está en orden, la salta.
@@ -90,11 +177,20 @@ function repararOrdenColumnas(anotar) {
       });
     });
 
+    /**
+     * clear() borra contenido y formatos, pero NO las reglas de validación:
+     * esas quedan pegadas a la columna. Si no se limpian antes de reescribir, un
+     * valor que cambia de columna choca con la lista de la columna anterior
+     * (por ejemplo, COBERTURA_MINIMA = 1 cayendo donde antes iba ESTADO_AREA).
+     */
+    hoja.getDataRange().clearDataValidations();
     hoja.clear();
+
     hoja.getRange(1, 1, 1, esperados.length).setValues([esperados]);
     if (reordenados.length) {
       hoja.getRange(2, 1, reordenados.length, esperados.length).setValues(reordenados);
     }
+    SpreadsheetApp.flush();
     prepararHoja_(hoja, def);
 
     arregladas.push(def.hoja);
