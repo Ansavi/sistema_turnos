@@ -67,7 +67,7 @@ function verificarSistema() {
                        .map(function (v) { return String(v).trim(); });
       var distinto = esperados.some(function (c, i) { return reales[i] !== c; });
       return distinto
-        ? 'difiere del esquema. No afecta al funcionamiento; para dejarlo prolijo, repararOrdenColumnas()'
+        ? 'difiere del esquema. No afecta al funcionamiento: el sistema localiza cada columna por su encabezado'
         : '';
     });
   });
@@ -112,7 +112,7 @@ function verificarSistema() {
       return String(u.NIVEL_ACCESO).toUpperCase() === 'ADMIN' &&
              String(u.ESTADO_USUARIO).toUpperCase() === 'ACTIVO';
     }).length;
-    if (!n) { throw new Error('ninguno. Ejecuta restablecerClaveAdmin()'); }
+    if (!n) { throw new Error('ninguno. Ejecuta repararAcceso()'); }
     return n + ' administrador(es)';
   });
 
