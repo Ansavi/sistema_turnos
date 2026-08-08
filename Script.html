@@ -632,7 +632,13 @@ function celdaHTML(fila, c, esFinde) {
   var idTurno = pend ? pend.idTurno : c.idTurno;
 
   var texto = '';
-  if (tipoNombre === 'TRABAJO' && idTurno) { texto = abrevTurno(idTurno); }
+  if (tipoNombre === 'TRABAJO' && idTurno) {
+    texto = abrevTurno(idTurno);
+    // La función va debajo del turno: en un juzgado importa tanto quién trabaja
+    // como si ese día lleva trámite o ejecución.
+    var fnAbrev = pend ? abrevFuncion(pend.idFuncion) : c.funcion;
+    if (fnAbrev) { texto = texto + '\n' + fnAbrev; }
+  }
   else if (tipoNombre) { texto = ABREV[tipoNombre] || tipoNombre.substring(0, 3); }
   else if (c.ausencia) { texto = ABREV[c.ausencia.tipo] || '·'; }
 
@@ -647,8 +653,12 @@ function celdaHTML(fila, c, esFinde) {
   if (c.feriado && !c.feriado.esLaborable) { clases.push('feriado'); }
 
   var horas = c.inicio ? ' · ' + c.inicio + ' a ' + c.fin + (c.cruzaDia ? ' del día siguiente' : '') : '';
+  var nomFuncion = '';
+  if (c.idFuncion && S.tablero.funciones) {
+    S.tablero.funciones.forEach(function (f) { if (f.id === c.idFuncion) { nomFuncion = ' · ' + f.nombre; } });
+  }
   var titulo = fila.persona + ' · ' + c.fecha +
-    (tipoNombre ? ' · ' + tipoNombre : ' · sin programar') + horas +
+    (tipoNombre ? ' · ' + tipoNombre : ' · sin programar') + horas + nomFuncion +
     (c.feriado ? ' · ' + (c.feriado.esLaborable ? 'Feriado laborable: ' : 'Feriado: ') + c.feriado.descripcion : '') +
     (c.motivo ? ' · ' + c.motivo : '') + (c.estado ? ' · ' + c.estado : '');
 
@@ -669,6 +679,13 @@ function colorTipo(nombre) {
   S.tablero.tiposDia.forEach(function (t) { if (t.nombre === nombre) { r = t.color; } });
   return r;
 }
+function abrevFuncion(id) {
+  var r = '';
+  if (!id || !S.tablero.funciones) { return ''; }
+  S.tablero.funciones.forEach(function (f) { if (f.id === id) { r = f.abrev; } });
+  return r;
+}
+
 function abrevTurno(id) {
   var r = '';
   S.tablero.turnos.forEach(function (t) { if (t.id === id) { r = t.nombre.substring(0, 3).toUpperCase(); } });
@@ -686,6 +703,13 @@ function barraPintado(t) {
                esc(tu.fin) + (tu.cruza ? ' del día siguiente' : '') + ')</option>';
       }).join('') +
     '</select></div>' +
+    (t.funciones && t.funciones.length
+      ? '<div><label for="pFuncion">Función</label><select id="pFuncion">' +
+          '<option value="">— la habitual —</option>' +
+          t.funciones.map(function (f) {
+            return '<option value="' + f.id + '">' + esc(f.nombre) + '</option>';
+          }).join('') + '</select></div>'
+      : '') +
     '<button class="btn" id="btnAplicar">Aplicar a la selección (<span id="nSel">0</span>)</button>' +
     '<button class="btn" id="btnQuitar">Quitar selección</button>' +
     '<div style="flex:1"></div>' +
@@ -745,6 +769,7 @@ function actualizarContadores() {
 
 function aplicarASeleccion() {
   var idTipo = $('pTipo').value, idTurno = $('pTurno').value;
+  var idFuncion = $('pFuncion') ? $('pFuncion').value : '';
   var nombre = nombreTipo(idTipo);
   if (nombre === 'TRABAJO' && !idTurno) {
     mensaje('Elige un turno: un día de trabajo no puede quedar sin turno.', 'error');
@@ -762,7 +787,9 @@ function aplicarASeleccion() {
     if (c.bloqueada && nombre === 'TRABAJO') { omitidas++; return; }
     var partes = k.split('|');
     S.pendientes[k] = { idPersonal: partes[0], fecha: partes[1], id: c.id,
-                        idTipoDia: idTipo, idTurno: nombre === 'TRABAJO' ? idTurno : '' };
+                        idTipoDia: idTipo,
+                        idTurno: nombre === 'TRABAJO' ? idTurno : '',
+                        idFuncion: nombre === 'TRABAJO' ? idFuncion : '' };
   });
 
   S.seleccion = {};
