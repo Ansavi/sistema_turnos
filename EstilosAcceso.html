@@ -140,4 +140,51 @@ table.matriz td.na{color:#C3CBD5;font-family:var(--mono);font-size:11px}
 .modal-pie{display:flex;gap:8px;justify-content:flex-end;margin-top:18px}
 .btn.peligro-solido{background:var(--rojo);border-color:var(--rojo);color:#fff}
 .btn.peligro-solido:hover{background:#8E1E17}
+
+/* ---------------------------------------------------------------
+   El atributo hidden de HTML equivale a display:none, pero CUALQUIER
+   regla de clase que declare display (como .app{display:grid} o
+   .acceso{display:flex}) tiene más peso y lo anula en silencio.
+   Sin esta línea, ocultar una pantalla con .hidden = true no hace nada
+   y las vistas se quedan superpuestas.
+   Debe ir al final de la última hoja de estilos que se carga.
+   --------------------------------------------------------------- */
+[hidden]{display:none !important}
+
+/* La pantalla de acceso debe quedar por encima de la barra superior,
+   que es sticky con z-index 20. */
+.acceso{z-index:70}
+
+/* ---------- Tarjetas de indicador ---------- */
+.tarjetas{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px}
+.kpi{
+  flex:1 1 190px;background:var(--superficie);border:1px solid var(--linea);
+  border-top:3px solid var(--acero);border-radius:var(--r);padding:14px 16px;
+  display:flex;flex-direction:column;gap:2px;
+}
+.kpi.bueno{border-top-color:var(--verde)}
+.kpi.malo{border-top-color:var(--rojo)}
+.kpi-tit{
+  font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--texto-tenue);
+}
+.kpi-num{font-size:30px;font-weight:600;line-height:1.1;letter-spacing:-.02em;color:var(--tinta)}
+.kpi.malo .kpi-num{color:var(--rojo)}
+.kpi.bueno .kpi-num{color:var(--verde)}
+.kpi-pie{font-size:12px;color:var(--texto-tenue)}
+
+.titulo-seccion{
+  margin:22px 0 10px;font-size:13px;font-weight:600;letter-spacing:-.01em;
+  padding-bottom:6px;border-bottom:1px solid var(--linea);
+}
+.aviso-ok{
+  display:flex;gap:10px;padding:10px 12px;border-left:3px solid var(--verde);
+  background:#E9F5F1;border-radius:0 var(--r) var(--r) 0;font-size:13px;
+}
+
+/* La celda de un feriado lleva una marca en la esquina superior izquierda. */
+.celda.feriado::before{
+  content:'';position:absolute;top:0;left:0;
+  border-top:7px solid #2D6A8E;border-right:7px solid transparent;
+}
 </style>
