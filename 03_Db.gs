@@ -103,26 +103,57 @@ var Db_ = {
 
   def: function (tabla) { return ESQUEMA_()[tabla]; },
 
+  /**
+   * Mapa campo → número de columna, leído de los encabezados REALES de la hoja.
+   *
+   * Todo el acceso a datos pasa por aquí. Mapear por posición obliga a que la hoja
+   * tenga exactamente el orden del esquema: basta con que alguien inserte una
+   * columna, o que una migración añada campos al final, para que cada valor se lea
+   * corrido y el sistema empiece a ver estados vacíos y referencias rotas.
+   * Con el mapa por nombre, el orden de las columnas deja de importar.
+   */
+  _indices: function (tabla) {
+    var hoja = this._hoja(tabla);
+    var ancho = Math.max(hoja.getLastColumn(), 1);
+    var cabeceras = hoja.getRange(1, 1, 1, ancho).getValues()[0];
+    var mapa = {};
+    cabeceras.forEach(function (v, i) {
+      var nombre = String(v).trim();
+      if (nombre) { mapa[nombre] = i + 1; }
+    });
+    return { mapa: mapa, ancho: ancho, hoja: hoja };
+  },
+
+  /** Columnas que el esquema declara y la hoja no tiene. */
+  columnasFaltantes: function (tabla) {
+    var mapa = this._indices(tabla).mapa;
+    return this.def(tabla).campos
+      .filter(function (f) { return !mapa[f.c]; })
+      .map(function (f) { return f.c; });
+  },
+
   /** Devuelve todas las filas como objetos, con _fila = número de fila en la hoja. */
   leer: function (tabla) {
     var def = this.def(tabla);
-    var hoja = this._hoja(tabla);
+    var info = this._indices(tabla);
+    var hoja = info.hoja;
     var ultima = hoja.getLastRow();
     if (ultima < 2) { return []; }
 
-    var cols = def.campos.map(function (f) { return f.c; });
-    var valores = hoja.getRange(2, 1, ultima - 1, cols.length).getValues();
-    var tiposFecha = {};
-    def.campos.forEach(function (f) { if (f.t === 'fecha') { tiposFecha[f.c] = true; } });
+    var valores = hoja.getRange(2, 1, ultima - 1, info.ancho).getValues();
+    var colPk = info.mapa[def.pk] || 1;
 
     var salida = [];
     for (var i = 0; i < valores.length; i++) {
       var fila = valores[i];
-      if (String(fila[0]).trim() === '') { continue; }
+      if (String(fila[colPk - 1]).trim() === '') { continue; }
+
       var obj = { _fila: i + 2 };
-      for (var j = 0; j < cols.length; j++) {
-        var v = fila[j];
-        obj[cols[j]] = tiposFecha[cols[j]] ? Utilidades_.aISO(v) : (v === null ? '' : v);
+      for (var j = 0; j < def.campos.length; j++) {
+        var f = def.campos[j];
+        var col = info.mapa[f.c];
+        var v = col ? fila[col - 1] : '';
+        obj[f.c] = (f.t === 'fecha') ? Utilidades_.aISO(v) : (v === null ? '' : v);
       }
       salida.push(obj);
     }
@@ -168,8 +199,20 @@ var Db_ = {
       reg[f.c] = datos[f.c] !== undefined ? datos[f.c] : (f.def || '');
     });
     this._sellar(tabla, reg, { correo: 'instalador' }, true);
-    hoja.appendRow(def.campos.map(function (f) { return reg[f.c]; }));
+    hoja.appendRow(this._aFila(tabla, reg));
     return reg;
+  },
+
+  /** Convierte un registro en una fila colocada según los encabezados reales. */
+  _aFila: function (tabla, reg) {
+    var info = this._indices(tabla);
+    var fila = [];
+    for (var i = 0; i < info.ancho; i++) { fila.push(''); }
+    this.def(tabla).campos.forEach(function (f) {
+      var col = info.mapa[f.c];
+      if (col) { fila[col - 1] = (reg[f.c] === undefined || reg[f.c] === null) ? '' : reg[f.c]; }
+    });
+    return fila;
   },
 
   /** Valida un registro contra el esquema. Devuelve array de mensajes. */
@@ -244,7 +287,7 @@ var Db_ = {
                    (f.t === 'fecha' ? Utilidades_.aISO(v) : v);
       });
       this._sellar(tabla, reg, ctx, true);
-      this._hoja(tabla).appendRow(def.campos.map(function (f) { return reg[f.c]; }));
+      this._hoja(tabla).appendRow(this._aFila(tabla, reg));
       Auditoria_.registrar(ctx, 'CREAR', tabla, reg[def.pk], '', '',
         JSON.stringify(reg), 'OK', '');
       return reg;
@@ -271,7 +314,8 @@ var Db_ = {
     var lock = LockService.getScriptLock();
     lock.waitLock(20000);
     try {
-      var hoja = this._hoja(tabla);
+      var info = this._indices(tabla);
+      var hoja = info.hoja;
       var fila = actual._fila;
       var cambiosReales = [];
 
@@ -282,16 +326,17 @@ var Db_ = {
       }
       this._sellar(tabla, propuesto, ctx, false);
 
-      def.campos.forEach(function (f, i) {
-        if (f.pk) { return; }
+      def.campos.forEach(function (f) {
+        var col = info.mapa[f.c];
+        if (f.pk || !col) { return; }
         if (f.auditoria) {
-          hoja.getRange(fila, i + 1).setValue(propuesto[f.c]);
+          hoja.getRange(fila, col).setValue(propuesto[f.c]);
           return;
         }
         var antes = String(actual[f.c] === null ? '' : actual[f.c]);
         var despues = f.t === 'fecha' ? Utilidades_.aISO(propuesto[f.c]) : String(propuesto[f.c] || '');
         if (antes !== despues) {
-          hoja.getRange(fila, i + 1).setValue(despues);
+          hoja.getRange(fila, col).setValue(despues);
           cambiosReales.push({ campo: f.c, antes: antes, despues: despues });
         }
       });
