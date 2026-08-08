@@ -315,3 +315,173 @@ function revisarOrdenColumnas() {
   console.log(texto);
   return texto;
 }
+
+/**
+ * REPARACIÓN TOTAL DEL ACCESO.
+ * Ejecuta SOLO esta función si no puedes entrar, sea cual sea el mensaje.
+ *
+ * Diagnostica y reconstruye la cadena PERSONAL → USUARIO → CREDENCIAL, que es lo
+ * único que hace falta para iniciar sesión. Si algún eslabón está roto, vacío o
+ * apunta a un registro inexistente, lo repara. No borra datos existentes.
+ *
+ * Imprime además el contenido crudo de esas tres hojas: si algo sigue fallando,
+ * ese informe dice exactamente por qué.
+ */
+function repararAcceso() {
+  var log = [];
+  var anotar = function (t) { log.push(t); console.log(t); };
+
+  anotar('REPARACIÓN DEL ACCESO  ' + Utilidades_.ahora());
+  anotar('='.repeat(56));
+
+  // 1. Las listas desplegables, a su columna correcta.
+  try {
+    sincronizarValidaciones();
+    anotar('Listas desplegables sincronizadas.');
+  } catch (e) {
+    anotar('Aviso al sincronizar listas: ' + e.message);
+  }
+
+  // 2. Diagnóstico de lo que hay.
+  var personas = Db_.leer('PERSONAL');
+  var usuarios = Db_.leer('USUARIO');
+  var credenciales = Db_.leer('CREDENCIAL');
+
+  anotar('');
+  anotar('ESTADO ACTUAL');
+  anotar('  PERSONAL: ' + personas.length + ' fila(s)');
+  personas.slice(0, 5).forEach(function (p) {
+    anotar('    ' + p.IDPERSONAL + ' | ' + p.NOMBRES + ' ' + p.APELLIDOS +
+           ' | ' + p.CORREO + ' | estado: "' + p.ESTADO_PERSONAL + '"');
+  });
+  anotar('  USUARIO: ' + usuarios.length + ' fila(s)');
+  usuarios.slice(0, 5).forEach(function (u) {
+    anotar('    ' + u.IDUSUARIO + ' | personal: "' + u.IDPERSONAL +
+           '" | nivel: "' + u.NIVEL_ACCESO + '" | estado: "' + u.ESTADO_USUARIO + '"');
+  });
+  anotar('  CREDENCIAL: ' + credenciales.length + ' fila(s)');
+  credenciales.slice(0, 5).forEach(function (c) {
+    anotar('    ' + c.IDCREDENCIAL + ' | login: "' + c.USUARIO_LOGIN +
+           '" | usuario: "' + c.IDUSUARIO + '" | estado: "' + c.ESTADO_CREDENCIAL + '"');
+  });
+
+  // 3. Reconstruir la cadena.
+  anotar('');
+  anotar('REPARACIÓN');
+  var correo = CONFIG_().ADMIN_INICIAL || Session.getEffectiveUser().getEmail() || 'admin@local';
+
+  // 3a. La persona
+  var persona = personas.filter(function (p) {
+    return p.IDPERSONAL && p.NOMBRES;
+  })[0];
+
+  if (!persona) {
+    var cargo = Db_.leer('CARGO')[0];
+    persona = Db_.insertarCrudo('PERSONAL', {
+      IDCARGO: cargo ? cargo.IDCARGO : '',
+      DNI: '00000000', NOMBRES: 'Administrador', APELLIDOS: 'del Sistema',
+      TELEFONO: '', CORREO: correo,
+      FECHA_NAC: '1990-01-01', FECHA_INGRESO: Utilidades_.hoyISO(),
+      FECHA_CESE: '', ESTADO_PERSONAL: 'ACTIVO',
+      OBSERVACIONES: 'Recreado por repararAcceso()'
+    });
+    anotar('  PERSONAL recreado: ' + persona.IDPERSONAL);
+  } else {
+    var arreglos = {};
+    if (String(persona.ESTADO_PERSONAL).toUpperCase() !== 'ACTIVO') { arreglos.ESTADO_PERSONAL = 'ACTIVO'; }
+    if (persona.FECHA_CESE) { arreglos.FECHA_CESE = ''; }
+    if (!persona.CORREO) { arreglos.CORREO = correo; }
+    if (Object.keys(arreglos).length) {
+      Seg_.guardar('PERSONAL', persona.IDPERSONAL, arreglos);
+      anotar('  PERSONAL ' + persona.IDPERSONAL + ' corregido: ' + Object.keys(arreglos).join(', '));
+    } else {
+      anotar('  PERSONAL ' + persona.IDPERSONAL + ' está correcto.');
+    }
+  }
+
+  // 3b. El usuario, ligado a esa persona
+  var usuario = usuarios.filter(function (u) {
+    return u.IDPERSONAL === persona.IDPERSONAL;
+  })[0] || usuarios[0];
+
+  if (!usuario) {
+    usuario = Db_.insertarCrudo('USUARIO', {
+      IDPERSONAL: persona.IDPERSONAL, NIVEL_ACCESO: 'ADMIN',
+      ESTADO_USUARIO: 'ACTIVO', OBSERVACIONES: 'Recreado por repararAcceso()'
+    });
+    anotar('  USUARIO recreado: ' + usuario.IDUSUARIO);
+  } else {
+    var arr2 = {};
+    if (usuario.IDPERSONAL !== persona.IDPERSONAL) { arr2.IDPERSONAL = persona.IDPERSONAL; }
+    if (String(usuario.NIVEL_ACCESO).toUpperCase() !== 'ADMIN') { arr2.NIVEL_ACCESO = 'ADMIN'; }
+    if (String(usuario.ESTADO_USUARIO).toUpperCase() !== 'ACTIVO') { arr2.ESTADO_USUARIO = 'ACTIVO'; }
+    if (Object.keys(arr2).length) {
+      Seg_.guardar('USUARIO', usuario.IDUSUARIO, arr2);
+      anotar('  USUARIO ' + usuario.IDUSUARIO + ' corregido: ' + Object.keys(arr2).join(', '));
+    } else {
+      anotar('  USUARIO ' + usuario.IDUSUARIO + ' está correcto.');
+    }
+  }
+
+  // 3c. La credencial, ligada a ese usuario
+  var temporal = Politica_.temporal();
+  var salt = Cripto_.salt();
+  var iter = SEGURIDAD_().ITERACIONES;
+  var hash = Cripto_.derivar(temporal, salt, iter);
+
+  var cred = credenciales.filter(function (c) {
+    return c.IDUSUARIO === usuario.IDUSUARIO;
+  })[0] || credenciales.filter(function (c) {
+    return String(c.USUARIO_LOGIN).toLowerCase() === 'admin';
+  })[0];
+
+  if (!cred) {
+    cred = Seg_.crear('CREDENCIAL', {
+      IDUSUARIO: usuario.IDUSUARIO, USUARIO_LOGIN: 'admin',
+      HASH: hash, SALT: salt, ITERACIONES: iter, HISTORIAL: '[]',
+      DEBE_CAMBIAR: 'SI', FECHA_CAMBIO: Utilidades_.ahora(),
+      INTENTOS_FALLIDOS: 0, BLOQUEADO_HASTA: '', ULTIMO_ACCESO: '',
+      ESTADO_CREDENCIAL: 'ACTIVA', OBSERVACIONES: 'Recreada por repararAcceso()'
+    });
+    anotar('  CREDENCIAL recreada: ' + cred.USUARIO_LOGIN);
+  } else {
+    Seg_.guardar('CREDENCIAL', cred.IDCREDENCIAL, {
+      IDUSUARIO: usuario.IDUSUARIO,
+      USUARIO_LOGIN: cred.USUARIO_LOGIN || 'admin',
+      SALT: salt, ITERACIONES: iter, HASH: hash, HISTORIAL: '[]',
+      DEBE_CAMBIAR: 'SI', FECHA_CAMBIO: Utilidades_.ahora(),
+      INTENTOS_FALLIDOS: 0, BLOQUEADO_HASTA: '', ESTADO_CREDENCIAL: 'ACTIVA'
+    });
+    anotar('  CREDENCIAL ' + (cred.USUARIO_LOGIN || 'admin') + ' restablecida.');
+  }
+
+  // 4. Comprobación real: se intenta iniciar sesión de verdad.
+  anotar('');
+  anotar('COMPROBACIÓN');
+  var login = (Db_.buscarPorId('CREDENCIAL', cred.IDCREDENCIAL) || {}).USUARIO_LOGIN || 'admin';
+  var resultado;
+  try {
+    var sesion = Auth_.iniciarSesion(login, temporal);
+    Auth_.cerrarSesion(sesion.token);
+    resultado = '  El inicio de sesión FUNCIONA.';
+  } catch (e) {
+    resultado = '  El inicio de sesión SIGUE FALLANDO: ' + e.message +
+                '\n  Copia todo este registro y envíalo para diagnóstico.';
+  }
+  anotar(resultado);
+
+  var texto = log.join('\n') + '\n' + '='.repeat(56) +
+              '\nUsuario: ' + login +
+              '\nContraseña temporal: ' + temporal +
+              '\n\nAnótala: no se puede volver a mostrar.';
+
+  console.log('\n' + '='.repeat(56) + '\nUsuario: ' + login +
+              '\nContraseña temporal: ' + temporal);
+  try {
+    SpreadsheetApp.getUi().alert('Acceso reparado',
+      'Usuario: ' + login + '\nContraseña temporal: ' + temporal +
+      '\n\n' + resultado.trim(), SpreadsheetApp.getUi().ButtonSet.OK);
+  } catch (ignore) { /* desde el editor basta el registro */ }
+
+  return texto;
+}
