@@ -67,6 +67,27 @@ var Utilidades_ = {
 
   normalizar: function (s) {
     return String(s || '').trim().toUpperCase();
+  },
+
+  /** Días inclusivos entre dos fechas ISO. Del 1 al 1 es 1 día, no 0. */
+  diasEntre: function (desde, hasta) {
+    if (!desde || !hasta) { return 0; }
+    var a = String(desde).split('-'), b = String(hasta).split('-');
+    var d1 = new Date(Number(a[0]), Number(a[1]) - 1, Number(a[2]));
+    var d2 = new Date(Number(b[0]), Number(b[1]) - 1, Number(b[2]));
+    return Math.round((d2 - d1) / 86400000) + 1;
+  },
+
+  /** 'HH:MM' a minutos desde medianoche. */
+  aMinutos: function (hora) {
+    var m = String(hora || '').match(/^(\d{1,2}):(\d{2})/);
+    return m ? Number(m[1]) * 60 + Number(m[2]) : 0;
+  },
+
+  /** ¿Se solapan dos intervalos 'AAAA-MM-DD HH:MM:SS'? */
+  solapan: function (ini1, fin1, ini2, fin2) {
+    if (!ini1 || !fin1 || !ini2 || !fin2) { return false; }
+    return ini1 < fin2 && ini2 < fin1;
   }
 };
 
@@ -146,6 +167,7 @@ var Db_ = {
       if (f.pk) { return; }
       reg[f.c] = datos[f.c] !== undefined ? datos[f.c] : (f.def || '');
     });
+    this._sellar(tabla, reg, { correo: 'instalador' }, true);
     hoja.appendRow(def.campos.map(function (f) { return reg[f.c]; }));
     return reg;
   },
@@ -221,6 +243,7 @@ var Db_ = {
         reg[f.c] = (v === undefined || v === null) ? (f.def || '') :
                    (f.t === 'fecha' ? Utilidades_.aISO(v) : v);
       });
+      this._sellar(tabla, reg, ctx, true);
       this._hoja(tabla).appendRow(def.campos.map(function (f) { return reg[f.c]; }));
       Auditoria_.registrar(ctx, 'CREAR', tabla, reg[def.pk], '', '',
         JSON.stringify(reg), 'OK', '');
@@ -251,8 +274,20 @@ var Db_ = {
       var hoja = this._hoja(tabla);
       var fila = actual._fila;
       var cambiosReales = [];
+
+      // VERSION sube en cada cambio: permite avisar en vez de sobrescribir
+      // cuando dos personas editan la misma celda del calendario.
+      if (def.campos.some(function (f) { return f.c === 'VERSION'; })) {
+        propuesto.VERSION = Number(actual.VERSION || 0) + 1;
+      }
+      this._sellar(tabla, propuesto, ctx, false);
+
       def.campos.forEach(function (f, i) {
         if (f.pk) { return; }
+        if (f.auditoria) {
+          hoja.getRange(fila, i + 1).setValue(propuesto[f.c]);
+          return;
+        }
         var antes = String(actual[f.c] === null ? '' : actual[f.c]);
         var despues = f.t === 'fecha' ? Utilidades_.aISO(propuesto[f.c]) : String(propuesto[f.c] || '');
         if (antes !== despues) {
@@ -282,20 +317,83 @@ var Db_ = {
     return this.actualizar(tabla, id, cambios, ctx);
   },
 
-  /** Campos calculados por el sistema antes de validar. */
+  /** Campos que calcula el sistema antes de validar. */
   _derivar: function (tabla, datos) {
     var d = {};
     Object.keys(datos).forEach(function (k) { d[k] = datos[k]; });
+    var F = Utilidades_.aISO;
 
-    if (tabla === 'VACACIONES' && d.FECHA_INICIO && d.DIAS) {
-      d.FECHA_FIN = Utilidades_.sumarDias(Utilidades_.aISO(d.FECHA_INICIO), Number(d.DIAS) - 1);
+    /**
+     * Vacaciones en las dos direcciones: si se registran las dos fechas, calcula
+     * los días; si se registran inicio y días, calcula el fin. Así el formulario
+     * puede pedir lo que resulte más cómodo sin cambiar la regla.
+     */
+    if (tabla === 'VACACIONES' && d.FECHA_INICIO) {
+      var ini = F(d.FECHA_INICIO);
+      if (d.FECHA_FIN) {
+        d.DIAS = Utilidades_.diasEntre(ini, F(d.FECHA_FIN));
+      } else if (d.DIAS) {
+        d.FECHA_FIN = Utilidades_.sumarDias(ini, Number(d.DIAS) - 1);
+      }
     }
+
     if (tabla === 'CUMPLEANIOS' && d.IDPERSONAL && !d.FECHA_BENEFICIO && d.ANIO_BENEFICIO) {
       var p = Db_.buscarPorId('PERSONAL', d.IDPERSONAL);
       if (p && p.FECHA_NAC) {
         d.FECHA_BENEFICIO = d.ANIO_BENEFICIO + '-' + String(p.FECHA_NAC).substring(5, 10);
       }
     }
+
+    // El cruce de medianoche se deduce de las horas: no es algo que se declare.
+    if (tabla === 'TURNO' && d.HORA_INICIO && d.HORA_FIN) {
+      var mIni = Utilidades_.aMinutos(d.HORA_INICIO);
+      var mFin = Utilidades_.aMinutos(d.HORA_FIN);
+      var cruza = mFin <= mIni;
+      d.CRUZA_MEDIANOCHE = cruza ? 'SI' : 'NO';
+      d.DURACION_HORAS = Math.round(((cruza ? mFin + 1440 : mFin) - mIni) / 6) / 10;
+    }
+
+    if (tabla === 'COMPENSATORIO' && d.FECHA_GENERACION) {
+      d.FECHA_VENCIMIENTO = Utilidades_.sumarDias(
+        F(d.FECHA_GENERACION), PARAM_NUM_('DIAS_VIGENCIA_COMPENSATORIO'));
+    }
+
+    /**
+     * Horas absolutas de la programación. Se congelan al guardar: si mañana alguien
+     * edita el horario del turno, la programación histórica no cambia sola, y el
+     * turno de 08:00 a 07:59 queda correctamente marcado como ocupando dos días.
+     */
+    if (tabla === 'CALENDARIO_PERSONAL' && d.FECHA_CALENDARIO) {
+      var fecha = F(d.FECHA_CALENDARIO);
+      if (d.IDTURNO) {
+        var t = Db_.buscarPorId('TURNO', d.IDTURNO);
+        if (t && t.HORA_INICIO && t.HORA_FIN) {
+          var cruzaT = Utilidades_.aMinutos(t.HORA_FIN) <= Utilidades_.aMinutos(t.HORA_INICIO);
+          d.INICIO_PROGRAMADO = fecha + ' ' + t.HORA_INICIO + ':00';
+          d.FIN_PROGRAMADO = (cruzaT ? Utilidades_.sumarDias(fecha, 1) : fecha) +
+                             ' ' + t.HORA_FIN + ':00';
+        }
+      } else {
+        d.INICIO_PROGRAMADO = '';
+        d.FIN_PROGRAMADO = '';
+      }
+    }
+
     return d;
+  },
+
+  /** Rellena las cuatro columnas de auditoría de fila. */
+  _sellar: function (tabla, reg, ctx, esNuevo) {
+    var def = this.def(tabla);
+    if (!def.auditoriaFila) { return reg; }
+    var quien = (ctx && ctx.correo) ? ctx.correo : 'sistema';
+    var ahora = Utilidades_.ahora();
+    if (esNuevo) {
+      reg.FECHA_REGISTRO = ahora;
+      reg.USUARIO_REGISTRO = quien;
+    }
+    reg.FECHA_MODIFICACION = ahora;
+    reg.USUARIO_MODIFICACION = quien;
+    return reg;
   }
 };
