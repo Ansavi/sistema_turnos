@@ -91,11 +91,11 @@ function repararEstructura_(anotar) {
 
     // Siempre, haya columnas nuevas o no: las listas desplegables de la versión
     // anterior siguen vigentes y rechazarían los valores nuevos.
-    var ajustadas = actualizarValidaciones_(hoja, def);
-    if (ajustadas.length) {
-      anotar('Listas desplegables actualizadas en ' + def.hoja + ': ' + ajustadas.join(', '));
-    }
   });
+
+  // Las listas se reasignan por nombre de columna, no por posición.
+  sincronizarValidaciones();
+  anotar('Listas desplegables sincronizadas con sus columnas.');
 
   SpreadsheetApp.flush();
   return creadas;
