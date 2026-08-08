@@ -146,6 +146,7 @@ var Reglas_ = {
         IDPERSONAL: p.IDPERSONAL,
         nombre: p.APELLIDOS + ', ' + p.NOMBRES,
         IDCARGO: p.IDCARGO,
+        cese: p.FECHA_CESE || '',
         desde: pa.FECHA_INICIO, hasta: pa.FECHA_FIN
       });
     });
