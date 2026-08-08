@@ -410,6 +410,14 @@ var Db_ = {
      */
     if (tabla === 'CALENDARIO_PERSONAL' && d.FECHA_CALENDARIO) {
       var fecha = F(d.FECHA_CALENDARIO);
+
+      // Sin función indicada, se toma la habitual de la asignación al juzgado.
+      if (!d.IDFUNCION && d.IDPERSONAL && d.IDAREA) {
+        var tipoDia = Db_.buscarPorId('TIPO_DIA', d.IDTIPO_DIA);
+        if (tipoDia && String(tipoDia.TIPO_DIA).toUpperCase() === 'TRABAJO') {
+          d.IDFUNCION = Cobertura_.funcionDe(d.IDPERSONAL, d.IDAREA, fecha, '');
+        }
+      }
       if (d.IDTURNO) {
         var t = Db_.buscarPorId('TURNO', d.IDTURNO);
         if (t && t.HORA_INICIO && t.HORA_FIN) {
