@@ -174,6 +174,22 @@ function pedirTexto(opciones, alAceptar) {
 
 function alternarMenu() { $('lateral').classList.toggle('abierto'); }
 
+/**
+ * Muestra una sola de las tres pantallas (arranque, acceso, app) y esconde las demás.
+ * Fija el estilo además del atributo hidden: si alguna hoja de estilos declara
+ * display para esas clases, el atributo por sí solo no oculta nada y las pantallas
+ * se superponen.
+ */
+function mostrarPantalla(cual) {
+  ['arranque', 'acceso', 'app'].forEach(function (id) {
+    var el = $(id);
+    if (!el) { return; }
+    var visible = (id === cual);
+    el.hidden = !visible;
+    el.style.display = visible ? '' : 'none';
+  });
+}
+
 /* ============================================================
    Acceso
    ============================================================ */
@@ -197,9 +213,7 @@ window.addEventListener('DOMContentLoaded', function () {
  * anterior congelada, sin saber que algo falló.
  */
 function fatal(texto) {
-  $('acceso').hidden = true;
-  $('app').hidden = true;
-  $('arranque').hidden = false;
+  mostrarPantalla('arranque');
   $('arranque').className = '';
   $('arranque').innerHTML =
     '<div class="puerta"><h2>No se pudo iniciar</h2><p>' + esc(texto) + '</p>' +
@@ -210,9 +224,7 @@ function fatal(texto) {
 function entrarAlPanel(silencioso) {
   api('arranque').then(function (d) {
     S.base = d;
-    $('arranque').hidden = true;
-    $('acceso').hidden = true;
-    $('app').hidden = false;
+    mostrarPantalla('app');
     $('marcaTitulo').textContent = d.app;
     $('sesionNombre').textContent = d.usuario.nombre;
     $('sesionCorreo').textContent = d.usuario.correo;
@@ -230,10 +242,8 @@ function entrarAlPanel(silencioso) {
 }
 
 function mostrarAcceso(aviso) {
-  $('arranque').hidden = true;
-  $('app').hidden = true;
+  mostrarPantalla('acceso');
   var caja = $('acceso');
-  caja.hidden = false;
   caja.innerHTML =
     '<div class="acceso-caja">' +
       '<div class="acceso-cab"><span class="eyebrow">PROGRAMACIÓN DE PERSONAL</span>' +
@@ -331,9 +341,8 @@ function revisarPolitica(valor) {
 }
 
 function pantallaCambioObligatorio(claveActual, motivo) {
+  mostrarPantalla('acceso');
   var caja = $('acceso');
-  caja.hidden = false;
-  $('app').hidden = true;
   caja.innerHTML =
     '<div class="acceso-caja">' +
       '<div class="acceso-cab"><span class="eyebrow">PRIMER INGRESO</span>' +
