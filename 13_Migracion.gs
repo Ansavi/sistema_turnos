@@ -37,12 +37,6 @@ function migrarAVersion2() {
    * todo lo que va después se lea corrido. Debe ir al final del proceso, cuando
    * ya están creadas todas las columnas.
    */
-  anotar('Verificando el orden de las columnas…');
-  var reordenadas = repararOrdenColumnas(anotar);
-  if (reordenadas.length) {
-    anotar('Hojas reordenadas: ' + reordenadas.length);
-  }
-
   var texto = 'MIGRACIÓN A LA VERSIÓN 2.0\n' + '='.repeat(46) + '\n' +
               pasos.join('\n') + '\n' + '='.repeat(46) +
               '\nHojas nuevas: ' + creadas.length +
@@ -99,36 +93,6 @@ function repararEstructura_(anotar) {
 
   SpreadsheetApp.flush();
   return creadas;
-}
-
-/**
- * Reaplica las listas desplegables de cada columna según el esquema vigente.
- *
- * Es imprescindible antes de escribir nada: Sheets guarda la regla de validación
- * dentro de la hoja, así que una columna creada por la versión 1 sigue aceptando
- * solo los valores de entonces. Al intentar escribir OPERADOR en NIVEL_ACCESO, o
- * CESADO en ESTADO_PERSONAL, la hoja los rechaza y la migración se detiene.
- *
- * El error además aparece desplazado: Apps Script agrupa las escrituras y la
- * excepción salta en la siguiente lectura, señalando una línea que no es la culpable.
- */
-function actualizarValidaciones_(hoja, def) {
-  var filas = Math.max(hoja.getMaxRows() - 1, 1);
-  var ajustadas = [];
-
-  def.campos.forEach(function (f, i) {
-    if (f.t !== 'lista' || !f.ops || !f.ops.length) { return; }
-    var rango = hoja.getRange(2, i + 1, filas, 1);
-    rango.setDataValidation(
-      SpreadsheetApp.newDataValidation()
-        .requireValueInList(f.ops, true)
-        .setAllowInvalid(false)
-        .setHelpText('Valores permitidos: ' + f.ops.join(', '))
-        .build());
-    ajustadas.push(f.c);
-  });
-
-  return ajustadas;
 }
 
 /** Rellena las columnas nuevas de las filas que ya existían. */
