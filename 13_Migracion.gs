@@ -212,6 +212,18 @@ function rellenarValoresPorDefecto_(anotar) {
 
 /** Siembra parámetros, actualiza tipos de día y completa la matriz de permisos. */
 function actualizarCatalogos_(anotar) {
+  // Funciones del secretario
+  var fn = 0;
+  FUNCIONES_INICIALES_().forEach(function (f) {
+    if (Db_.buscarPor('FUNCION', 'FUNCION', f.nombre)) { return; }
+    Db_.insertarCrudo('FUNCION', {
+      FUNCION: f.nombre, ABREVIATURA: f.abrev, COLOR: f.color,
+      ESTADO: 'ACTIVO', OBSERVACIONES: f.nota
+    });
+    fn++;
+  });
+  if (fn) { anotar('FUNCION: ' + fn + ' función(es) sembradas'); }
+
   // Parámetros
   var nuevos = 0;
   PARAMETROS_DEFECTO_().forEach(function (p) {
