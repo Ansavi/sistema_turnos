@@ -96,10 +96,13 @@ var Seg_ = {
     var def = ESQUEMA_()[tabla];
     var actual = Db_.buscarPorId(tabla, id);
     if (!actual) { throw new Error('No existe ' + id + ' en ' + tabla + '.'); }
-    var hoja = SS_().getSheetByName(def.hoja);
-    def.campos.forEach(function (f, i) {
+
+    // Por nombre de columna, nunca por posición: la hoja puede tener otro orden.
+    var info = Db_._indices(tabla);
+    def.campos.forEach(function (f) {
       if (cambios[f.c] === undefined) { return; }
-      hoja.getRange(actual._fila, i + 1).setValue(cambios[f.c]);
+      var col = info.mapa[f.c];
+      if (col) { info.hoja.getRange(actual._fila, col).setValue(cambios[f.c]); }
     });
     return Db_.buscarPorId(tabla, id);
   },
@@ -113,7 +116,7 @@ var Seg_ = {
       if (f.pk) { return; }
       reg[f.c] = datos[f.c] !== undefined ? datos[f.c] : (f.def !== undefined ? f.def : '');
     });
-    hoja.appendRow(def.campos.map(function (f) { return reg[f.c]; }));
+    hoja.appendRow(Db_._aFila(tabla, reg));
     return reg;
   }
 };
