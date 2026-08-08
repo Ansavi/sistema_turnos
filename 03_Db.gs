@@ -289,7 +289,7 @@ var Db_ = {
       this._sellar(tabla, reg, ctx, true);
       this._hoja(tabla).appendRow(this._aFila(tabla, reg));
       Auditoria_.registrar(ctx, 'CREAR', tabla, reg[def.pk], '', '',
-        JSON.stringify(reg), 'OK', '');
+        this._resumenLegible(tabla, reg), 'OK', '');
       return reg;
     } finally { lock.releaseLock(); }
   },
@@ -425,6 +425,22 @@ var Db_ = {
     }
 
     return d;
+  },
+
+  /**
+   * Resumen del registro para la auditoría, en texto legible.
+   * Antes se guardaba serializado, lo que llenaba la celda de llaves y comillas
+   * y obligaba a descifrarla a ojo. Quien audita necesita leerlo, no parsearlo.
+   */
+  _resumenLegible: function (tabla, reg) {
+    var partes = [];
+    this.def(tabla).campos.forEach(function (f) {
+      if (f.auditoria || f.pk) { return; }
+      var v = reg[f.c];
+      if (v === '' || v === null || v === undefined) { return; }
+      partes.push(f.c + ': ' + v);
+    });
+    return partes.join(' · ');
   },
 
   /** Rellena las cuatro columnas de auditoría de fila. */
