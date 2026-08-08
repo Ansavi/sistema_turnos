@@ -363,6 +363,21 @@ var Reglas_ = {
     if (nombreTipo === 'TRABAJO' && !d.IDTURNO) {
       e.push('Un día de trabajo necesita turno asignado.');
     }
+
+    /**
+     * La función del día (trámite o ejecución) solo tiene sentido en días de
+     * trabajo, y debe estar activa. Si no se indica, se hereda la habitual de la
+     * asignación al juzgado, así no hay que repetirla todos los días.
+     */
+    if (d.IDFUNCION) {
+      var fn = Db_.buscarPorId('FUNCION', d.IDFUNCION);
+      if (fn && String(fn.ESTADO).toUpperCase() !== 'ACTIVO') {
+        e.push('La función "' + fn.FUNCION + '" está inactiva.');
+      }
+      if (nombreTipo !== 'TRABAJO') {
+        e.push('La función de secretario solo se indica en días de trabajo.');
+      }
+    }
     if (d.IDTURNO) {
       var habilitado = Db_.leer('AREA_TURNO').some(function (r) {
         return r.IDAREA === d.IDAREA && r.IDTURNO === d.IDTURNO &&
