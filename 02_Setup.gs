@@ -94,6 +94,14 @@ function sembrarCatalogos_() {
     });
   });
 
+  FUNCIONES_INICIALES_().forEach(function (f) {
+    if (Db_.buscarPor('FUNCION', 'FUNCION', f.nombre)) { return; }
+    Db_.insertarCrudo('FUNCION', {
+      FUNCION: f.nombre, ABREVIATURA: f.abrev, COLOR: f.color,
+      ESTADO: 'ACTIVO', OBSERVACIONES: f.nota
+    });
+  });
+
   PARAMETROS_DEFECTO_().forEach(function (p) {
     if (Db_.buscarPor('PARAMETRO', 'CLAVE', p.clave)) { return; }
     Db_.insertarCrudo('PARAMETRO', {
