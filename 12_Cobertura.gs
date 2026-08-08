@@ -41,13 +41,51 @@ var Cobertura_ = {
     if (!area) { return null; }
     var minimo = Number(area.COBERTURA_MINIMA);
     if (isNaN(minimo)) { minimo = PARAM_NUM_('COBERTURA_MINIMA_DEFECTO'); }
+
+    /**
+     * Cobertura por función: si el juzgado tiene filas en COBERTURA_AREA, cada
+     * función lleva su propio mínimo. Un día con dos secretarios de trámite y
+     * ninguno de ejecución deja el juzgado descubierto aunque haya dos personas.
+     * Sin filas, se cuenta el total y el comportamiento no cambia.
+     */
+    var funciones = Db_.leer('FUNCION');
+    var nombreFuncion = {};
+    funciones.forEach(function (f) { nombreFuncion[f.IDFUNCION] = f.FUNCION; });
+
+    var porFuncion = [];
+    Db_.leer('COBERTURA_AREA').forEach(function (c) {
+      if (c.IDAREA !== idArea || String(c.ESTADO).toUpperCase() !== 'ACTIVO') { return; }
+      var min = Number(c.MINIMO);
+      if (isNaN(min) || min <= 0) { return; }
+      porFuncion.push({
+        idFuncion: c.IDFUNCION,
+        nombre: nombreFuncion[c.IDFUNCION] || c.IDFUNCION,
+        minimo: min
+      });
+    });
+
     return {
       idArea: idArea,
       nombre: area.AREA,
       minimo: minimo,
+      porFuncion: porFuncion,
       idCargoCritico: area.IDCARGO_CRITICO || '',
-      controla: !!area.IDCARGO_CRITICO && minimo > 0
+      controla: !!area.IDCARGO_CRITICO && (minimo > 0 || porFuncion.length > 0)
     };
+  },
+
+  /** Función de una persona en un juzgado en una fecha: la del día o la habitual. */
+  funcionDe: function (idPersonal, idArea, fecha, funcionDelDia) {
+    if (funcionDelDia) { return funcionDelDia; }
+    var habitual = '';
+    Db_.leer('PERSONAL_AREA').forEach(function (pa) {
+      if (habitual || pa.IDPERSONAL !== idPersonal || pa.IDAREA !== idArea) { return; }
+      if (String(pa.ESTADO).toUpperCase() !== 'ACTIVO') { return; }
+      if (pa.FECHA_INICIO && pa.FECHA_INICIO > fecha) { return; }
+      if (pa.FECHA_FIN && pa.FECHA_FIN < fecha) { return; }
+      habitual = pa.IDFUNCION || '';
+    });
+    return habitual;
   },
 
   /**
@@ -63,7 +101,7 @@ var Cobertura_ = {
     Db_.leer('PERSONAL').forEach(function (p) { personas[p.IDPERSONAL] = p; });
 
     var salida = [];
-    var agregar = function (idPersonal, origen, ini, fin) {
+    var agregar = function (idPersonal, origen, ini, fin, idFuncion) {
       var p = personas[idPersonal];
       if (!p) { return; }
       if (p.IDCARGO !== cfg.idCargoCritico) { return; }
@@ -72,6 +110,7 @@ var Cobertura_ = {
       salida.push({
         idPersonal: idPersonal,
         nombre: p.APELLIDOS + ', ' + p.NOMBRES,
+        idFuncion: idFuncion || '',
         origen: origen,
         desde: ini || '',
         hasta: fin || '',
@@ -84,14 +123,20 @@ var Cobertura_ = {
       if (String(pa.ESTADO).toUpperCase() !== 'ACTIVO') { return; }
       if (pa.FECHA_INICIO && pa.FECHA_INICIO > hasta) { return; }
       if (pa.FECHA_FIN && pa.FECHA_FIN < desde) { return; }
-      agregar(pa.IDPERSONAL, 'TITULAR', pa.FECHA_INICIO, pa.FECHA_FIN);
+      agregar(pa.IDPERSONAL, 'TITULAR', pa.FECHA_INICIO, pa.FECHA_FIN, pa.IDFUNCION);
     });
 
     Db_.leer('REEMPLAZO').forEach(function (r) {
       if (r.IDAREA !== idArea) { return; }
       if (String(r.ESTADO).toUpperCase() !== 'ACTIVO') { return; }
       if (r.FECHA_INICIO > hasta || r.FECHA_FIN < desde) { return; }
-      agregar(r.IDPERSONAL_VOLANTE, 'REEMPLAZO', r.FECHA_INICIO, r.FECHA_FIN);
+      // Sin función explícita, el volante cubre la de la persona a la que reemplaza:
+      // es lo que se espera cuando alguien entra a sustituir a otro.
+      var fnReemplazo = r.IDFUNCION;
+      if (!fnReemplazo && r.IDPERSONAL_CUBIERTO) {
+        fnReemplazo = Cobertura_.funcionDe(r.IDPERSONAL_CUBIERTO, idArea, desde, '');
+      }
+      agregar(r.IDPERSONAL_VOLANTE, 'REEMPLAZO', r.FECHA_INICIO, r.FECHA_FIN, fnReemplazo);
     });
 
     return salida;
@@ -157,22 +202,43 @@ var Cobertura_ = {
                            dia >= simulada.desde && dia <= simulada.hasta;
 
         if (simuladoAqui) {
-          ausentes.push({ nombre: p.nombre, motivo: simulada.etiqueta || 'la ausencia que registras' });
+          ausentes.push({ nombre: p.nombre, idFuncion: p.idFuncion,
+                          motivo: simulada.etiqueta || 'la ausencia que registras' });
         } else if (ocupado) {
-          ausentes.push({ nombre: p.nombre, motivo: ocupado.etiqueta });
+          ausentes.push({ nombre: p.nombre, idFuncion: p.idFuncion, motivo: ocupado.etiqueta });
         } else {
           disponibles.push(p);
         }
       }
 
-      if (disponibles.length < cfg.minimo) {
+      // Cobertura global del juzgado
+      if (cfg.minimo > 0 && disponibles.length < cfg.minimo) {
         conflictos.push({
           fecha: dia,
+          funcion: '',
           disponibles: disponibles.length,
           requeridos: cfg.minimo,
           ausentes: ausentes
         });
       }
+
+      // Cobertura por función: se evalúa cada una por separado.
+      cfg.porFuncion.forEach(function (req) {
+        var conEsaFuncion = disponibles.filter(function (p) {
+          return p.idFuncion === req.idFuncion;
+        });
+        if (conEsaFuncion.length >= req.minimo) { return; }
+        conflictos.push({
+          fecha: dia,
+          funcion: req.nombre,
+          disponibles: conEsaFuncion.length,
+          requeridos: req.minimo,
+          ausentes: ausentes.filter(function (a) {
+            return !a.idFuncion || a.idFuncion === req.idFuncion;
+          })
+        });
+      });
+
       dia = Utilidades_.sumarDias(dia, 1);
     }
 
@@ -228,7 +294,16 @@ var Cobertura_ = {
       ? fechas.join(', ')
       : fechas[0] + ' … ' + fechas[fechas.length - 1] + ' (' + fechas.length + ' días)';
 
-    return 'El juzgado ' + r.juzgado + ' quedaría sin la cobertura mínima de ' + r.minimo +
+    // Si el conflicto es de una función concreta, decirlo: no es lo mismo quedarse
+    // sin secretarios que quedarse sin secretario de ejecución.
+    var funciones = {};
+    c.forEach(function (x) { if (x.funcion) { funciones[x.funcion] = true; } });
+    var nombres = Object.keys(funciones);
+    var falta = nombres.length
+      ? 'sin secretario de ' + nombres.join(' ni de ').toLowerCase()
+      : 'sin la cobertura mínima de ' + r.minimo;
+
+    return 'El juzgado ' + r.juzgado + ' quedaría ' + falta +
            ' el ' + lista + '. Coinciden: ' + Object.keys(quienes).join('; ') +
            '. Registra un reemplazo o mueve las fechas.';
   },
@@ -294,10 +369,12 @@ var Cobertura_ = {
     if (!r.controla) {
       return { controla: false, mensaje: 'Este juzgado no tiene configurado el control de cobertura.' };
     }
+    var cfg = this.configuracion(idArea);
     return {
       controla: true,
       juzgado: r.juzgado,
       minimo: r.minimo,
+      porFuncion: cfg ? cfg.porFuncion : [],
       plantilla: r.plantilla,
       diasEnRiesgo: r.conflictos.length,
       detalle: r.conflictos
