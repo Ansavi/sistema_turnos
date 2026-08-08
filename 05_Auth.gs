@@ -594,39 +594,3 @@ function limpiarSesiones() {
   });
   return n;
 }
-
-/**
- * Calibración. Ejecútala desde el editor para saber cuánto cuesta realmente el
- * hash en TU proyecto: el tiempo depende del entorno de Apps Script, no del código.
- *
- * Lee el resultado en el registro de ejecución y ajusta SEGURIDAD_().ITERACIONES:
- * un ingreso debería tardar entre 1 y 2 segundos. Más que eso frustra al usuario;
- * mucho menos, debilita la protección del hash.
- */
-function medirCostoHash() {
-  var salt = Cripto_.salt();
-  var iter = SEGURIDAD_().ITERACIONES;
-
-  var t0 = new Date().getTime();
-  Cripto_.derivar('ContrasenaDePrueba123', salt, iter);
-  var unaDerivacion = new Date().getTime() - t0;
-
-  var texto =
-    'Iteraciones configuradas: ' + iter + '\n' +
-    'Una derivación: ' + unaDerivacion + ' ms\n' +
-    '\n' +
-    'Coste estimado por operación:\n' +
-    '  · Ingresar (1 derivación):        ' + unaDerivacion + ' ms\n' +
-    '  · Cambiar contraseña (' + (SEGURIDAD_().HISTORIAL_CLAVES + 2) + ' derivaciones): ' +
-        (unaDerivacion * (SEGURIDAD_().HISTORIAL_CLAVES + 2)) + ' ms\n' +
-    '\n' +
-    'Si el ingreso supera los 2000 ms, baja ITERACIONES en 01_Config.gs.\n' +
-    'Para apuntar a 1500 ms por ingreso, usa aproximadamente: ' +
-        Math.max(200, Math.round(iter * 1500 / Math.max(unaDerivacion, 1))) + ' iteraciones.';
-
-  console.log(texto);
-  try {
-    SpreadsheetApp.getUi().alert('Coste del hash', texto, SpreadsheetApp.getUi().ButtonSet.OK);
-  } catch (ignore) { /* ejecutado desde el editor */ }
-  return texto;
-}
