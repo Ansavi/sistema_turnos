@@ -29,6 +29,9 @@ var Calendario_ = {
       };
     });
 
+    var feriados = Reglas_.mapaFeriados(idArea, desde, hasta);
+    var cobertura = Cobertura_.panel(idArea, desde, hasta);
+
     var programado = {};
     Db_.leer('CALENDARIO_PERSONAL').forEach(function (r) {
       if (r.IDAREA !== idArea) { return; }
@@ -42,7 +45,16 @@ var Calendario_ = {
       var celdas = dias.map(function (f) {
         var reg = programado[p.IDPERSONAL] && programado[p.IDPERSONAL][f];
         var au = mapa[p.IDPERSONAL] && mapa[p.IDPERSONAL][f];
-        var fueraDeAsignacion = (p.desde && f < p.desde) || (p.hasta && f > p.hasta);
+        var fer = feriados[f] || null;
+        var cesado = p.cese && f > p.cese;
+        var fueraDeAsignacion = (p.desde && f < p.desde) || (p.hasta && f > p.hasta) || cesado;
+
+        var motivo = '';
+        if (cesado) { motivo = 'Cesó el ' + p.cese; }
+        else if (fueraDeAsignacion) { motivo = 'Fuera del periodo de asignación al juzgado'; }
+        else if (au) { motivo = au.detalle; }
+        else if (fer && !fer.esLaborable) { motivo = 'Feriado: ' + fer.descripcion; }
+
         return {
           fecha: f,
           id: reg ? reg.IDCALENDARIO_PERSONAL : '',
@@ -50,11 +62,16 @@ var Calendario_ = {
           tipo: reg && tipos[reg.IDTIPO_DIA] ? tipos[reg.IDTIPO_DIA].nombre : '',
           idTurno: reg ? reg.IDTURNO : '',
           estado: reg ? reg.ESTADO_PROGRAMACION : '',
+          inicio: reg && reg.INICIO_PROGRAMADO ? reg.INICIO_PROGRAMADO.substring(11, 16) : '',
+          fin: reg && reg.FIN_PROGRAMADO ? reg.FIN_PROGRAMADO.substring(11, 16) : '',
+          cruzaDia: !!(reg && reg.FIN_PROGRAMADO &&
+                       reg.FIN_PROGRAMADO.substring(0, 10) !== f),
+          version: reg ? Number(reg.VERSION || 1) : 0,
           observaciones: reg ? reg.OBSERVACIONES : '',
           ausencia: au || null,
+          feriado: fer,
           bloqueada: fueraDeAsignacion || (au && au.nivel === 'BLOQUEO') || false,
-          motivo: fueraDeAsignacion ? 'Fuera del periodo de asignación al área'
-                                    : (au ? au.detalle : '')
+          motivo: motivo
         };
       });
       return { idPersonal: p.IDPERSONAL, persona: p.nombre, idCargo: p.IDCARGO, celdas: celdas };
@@ -66,12 +83,19 @@ var Calendario_ = {
       finDeSemana: dias.map(function (f) { return Utilidades_.esFinDeSemana(f); }),
       turnos: turnos.map(function (t) {
         return { id: t.IDTURNO, nombre: t.NOMBRE_TURNO, inicio: t.HORA_INICIO,
-                 fin: t.HORA_FIN, tipo: t.TIPO_TURNO };
+                 fin: t.HORA_FIN, tipo: t.TIPO_TURNO,
+                 cruza: String(t.CRUZA_MEDIANOCHE).toUpperCase() === 'SI',
+                 duracion: Number(t.DURACION_HORAS) || 0 };
       }),
       tiposDia: Object.keys(tipos).map(function (k) { return tipos[k]; })
                   .filter(function (t) { return t.activo; }),
       filas: filas,
       resumen: this._resumen(filas, tipos),
+      feriados: Object.keys(feriados).map(function (f) {
+        return { fecha: f, descripcion: feriados[f].descripcion,
+                 esLaborable: feriados[f].esLaborable, deTurno: feriados[f].deTurno };
+      }),
+      cobertura: cobertura,
       advertencias: Reglas_.advertenciasDeMes(idArea, anio, mes),
       puedeEditar: Auth_.puedeEscribir(ctx, 'CALENDARIO_PERSONAL'),
       puedePublicar: !!ctx.permisos.publicar
@@ -152,6 +176,7 @@ var Calendario_ = {
     var dias = Utilidades_.diasDelMes(anio, mes);
     var desde = dias[0], hasta = dias[dias.length - 1];
     var mapa = Reglas_.mapaAusencias(desde, hasta);
+    var feriadosMes = Reglas_.mapaFeriados(idArea, desde, hasta);
     var personal = Reglas_.personalDeArea(idArea, desde, hasta);
 
     var idTrabajo = Reglas_.idTipoDia('TRABAJO');
@@ -165,10 +190,16 @@ var Calendario_ = {
         if (p.hasta && f > p.hasta) { return; }
 
         var au = mapa[p.IDPERSONAL] && mapa[p.IDPERSONAL][f];
+        var fer = feriadosMes[f];
         if (au && au.nivel === 'BLOQUEO') {
           pendientes.push({ idPersonal: p.IDPERSONAL, fecha: f,
             idTipoDia: Reglas_.idTipoDia(au.tipo), idTurno: '',
             observaciones: 'Automático: ' + au.detalle });
+        } else if (fer && !fer.esLaborable) {
+          // Regla 45: solo libera si el juzgado no está de turno esa fecha.
+          pendientes.push({ idPersonal: p.IDPERSONAL, fecha: f,
+            idTipoDia: Reglas_.idTipoDia('FERIADO'), idTurno: '',
+            observaciones: 'Automático: ' + fer.descripcion });
         } else if (Utilidades_.esFinDeSemana(f)) {
           pendientes.push({ idPersonal: p.IDPERSONAL, fecha: f, idTipoDia: idDescanso,
             idTurno: '', observaciones: 'Automático: descanso de fin de semana' });
