@@ -29,6 +29,13 @@ var Calendario_ = {
       };
     });
 
+    var funciones = {};
+    Db_.leer('FUNCION').forEach(function (f) {
+      funciones[f.IDFUNCION] = { id: f.IDFUNCION, nombre: f.FUNCION,
+                                 abrev: f.ABREVIATURA, color: f.COLOR,
+                                 activo: String(f.ESTADO).toUpperCase() === 'ACTIVO' };
+    });
+
     var feriados = Reglas_.mapaFeriados(idArea, desde, hasta);
     var cobertura = Cobertura_.panel(idArea, desde, hasta);
 
@@ -61,6 +68,9 @@ var Calendario_ = {
           idTipoDia: reg ? reg.IDTIPO_DIA : '',
           tipo: reg && tipos[reg.IDTIPO_DIA] ? tipos[reg.IDTIPO_DIA].nombre : '',
           idTurno: reg ? reg.IDTURNO : '',
+          idFuncion: reg ? reg.IDFUNCION : '',
+          funcion: reg && reg.IDFUNCION && funciones[reg.IDFUNCION]
+                     ? funciones[reg.IDFUNCION].abrev : '',
           estado: reg ? reg.ESTADO_PROGRAMACION : '',
           inicio: reg && reg.INICIO_PROGRAMADO ? reg.INICIO_PROGRAMADO.substring(11, 16) : '',
           fin: reg && reg.FIN_PROGRAMADO ? reg.FIN_PROGRAMADO.substring(11, 16) : '',
@@ -89,6 +99,8 @@ var Calendario_ = {
       }),
       tiposDia: Object.keys(tipos).map(function (k) { return tipos[k]; })
                   .filter(function (t) { return t.activo; }),
+      funciones: Object.keys(funciones).map(function (k) { return funciones[k]; })
+                   .filter(function (f) { return f.activo; }),
       filas: filas,
       resumen: this._resumen(filas, tipos),
       feriados: Object.keys(feriados).map(function (f) {
@@ -131,6 +143,7 @@ var Calendario_ = {
           IDPERSONAL: c.idPersonal,
           IDAREA: idArea,
           IDTURNO: c.idTurno || '',
+          IDFUNCION: c.idFuncion || '',
           IDTIPO_DIA: c.idTipoDia,
           FECHA_CALENDARIO: c.fecha,
           ESTADO_PROGRAMACION: 'BORRADOR',
