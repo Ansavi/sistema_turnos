@@ -439,38 +439,45 @@ function abrirCambioClave() {
 /* ============================================================
    Navegación
    ============================================================ */
+var ORDEN_GRUPOS = ['Programación', 'Incidencias', 'Personal', 'Maestros', 'Seguridad'];
+
 function pintarNav() {
   var nav = $('nav');
-  var grupos = { 'Ausencias': [], 'Maestros': [], 'Seguridad': [] };
+  var grupos = {};
+  ORDEN_GRUPOS.forEach(function (g) { grupos[g] = []; });
+
   Object.keys(S.base.tablas).forEach(function (k) {
     var t = S.base.tablas[k];
+    // Estas tienen pantalla propia, no la tabla genérica.
     if (k === 'CALENDARIO_PERSONAL' || k === 'AUDITORIA' || k === 'PERMISO') { return; }
-    if (t.grupo === 'Maestros' && (k === 'PERSONAL' || k === 'PERSONAL_AREA')) {
-      grupos.Maestros.push(t); return;
-    }
     if (grupos[t.grupo]) { grupos[t.grupo].push(t); }
   });
 
   var html = '';
-  if (puede('CALENDARIO', 'VER')) {
-    html += '<div class="nav-grupo"><h2>Programación</h2>' +
-            '<button class="nav-item" data-vista="calendario">Calendario del mes</button></div>';
-  }
-
-  ['Ausencias', 'Maestros', 'Seguridad'].forEach(function (g) {
-    var items = grupos[g].slice();
+  ORDEN_GRUPOS.forEach(function (g) {
+    var items = grupos[g] || [];
     var extras = '';
+
+    if (g === 'Programación') {
+      if (puede('CALENDARIO', 'VER')) {
+        extras = '<button class="nav-item" data-vista="calendario">Calendario del mes</button>' + extras;
+      }
+      if (puede('COBERTURA', 'VER')) {
+        extras += '<button class="nav-item" data-vista="cobertura">Cobertura del juzgado</button>';
+      }
+    }
     if (g === 'Seguridad') {
       if (puede('PERMISOS', 'VER')) { extras += '<button class="nav-item" data-vista="permisos">Permisos</button>'; }
       if (puede('AUDITORIA', 'VER')) { extras += '<button class="nav-item" data-vista="auditoria">Auditoría</button>'; }
     }
     if (!items.length && !extras) { return; }
-    html += '<div class="nav-grupo"><h2>' + g + '</h2>';
+
+    html += '<div class="nav-grupo"><h2>' + esc(g) + '</h2>' + extras;
     items.forEach(function (t) {
       html += '<button class="nav-item" data-tabla="' + t.clave + '">' + esc(t.etiqueta) +
               (t.editable ? '' : '<span class="marca-lectura">SOLO VER</span>') + '</button>';
     });
-    html += extras + '</div>';
+    html += '</div>';
   });
 
   nav.innerHTML = html;
@@ -498,6 +505,7 @@ function irA(vista) {
   if (vista.tipo === 'calendario') { vistaCalendario(); }
   else if (vista.tipo === 'auditoria') { vistaAuditoria(); }
   else if (vista.tipo === 'permisos') { vistaPermisos(); }
+  else if (vista.tipo === 'cobertura') { vistaCobertura(); }
   else { vistaTabla(vista.tabla); }
 }
 
@@ -563,6 +571,21 @@ function pintarTablero() {
   }
 
   var html = '';
+
+  if (t.cobertura && t.cobertura.controla && t.cobertura.diasEnRiesgo) {
+    html += '<div class="aviso" style="border-left-color:var(--rojo);background:#FBE9E7">' +
+      '<span class="mono">COBERTURA</span><span>' + t.cobertura.diasEnRiesgo +
+      ' día(s) de este mes quedan por debajo del mínimo de ' + t.cobertura.minimo + '. ' +
+      '<a href="#" onclick="irA({tipo:\'cobertura\'});return false;">Ver detalle</a></span></div>';
+  }
+  if (t.feriados && t.feriados.length) {
+    html += '<p class="pista" style="margin:0 0 12px">Feriados del mes: ' +
+      t.feriados.map(function (f) {
+        return esc(f.fecha.substring(8, 10)) + ' ' + esc(f.descripcion) +
+               (f.esLaborable ? ' <strong>(laborable' + (f.deTurno ? ', juzgado de turno' : '') + ')</strong>' : '');
+      }).join(' · ') + '</p>';
+  }
+
   if (t.puedeEditar) { html += barraPintado(t); }
 
   html += '<div class="rejilla-marco"><table class="rejilla"><thead><tr><th class="persona">Personal</th>';
@@ -621,8 +644,12 @@ function celdaHTML(fila, c, esFinde) {
   if (pend) { clases.push('pendiente'); }
   if (S.seleccion[k]) { clases.push('sel'); }
 
+  if (c.feriado && !c.feriado.esLaborable) { clases.push('feriado'); }
+
+  var horas = c.inicio ? ' · ' + c.inicio + ' a ' + c.fin + (c.cruzaDia ? ' del día siguiente' : '') : '';
   var titulo = fila.persona + ' · ' + c.fecha +
-    (tipoNombre ? ' · ' + tipoNombre : ' · sin programar') +
+    (tipoNombre ? ' · ' + tipoNombre : ' · sin programar') + horas +
+    (c.feriado ? ' · ' + (c.feriado.esLaborable ? 'Feriado laborable: ' : 'Feriado: ') + c.feriado.descripcion : '') +
     (c.motivo ? ' · ' + c.motivo : '') + (c.estado ? ' · ' + c.estado : '');
 
   return '<td class="' + clases.join(' ') + '" style="--motivo:' + (color || '#6B7A8C') + ';"' +
@@ -655,7 +682,8 @@ function barraPintado(t) {
     '</select></div>' +
     '<div><label for="pTurno">Turno</label><select id="pTurno"><option value="">— sin turno —</option>' +
       t.turnos.map(function (tu) {
-        return '<option value="' + tu.id + '">' + esc(tu.nombre) + ' (' + esc(tu.inicio) + '–' + esc(tu.fin) + ')</option>';
+        return '<option value="' + tu.id + '">' + esc(tu.nombre) + ' (' + esc(tu.inicio) + '–' +
+               esc(tu.fin) + (tu.cruza ? ' del día siguiente' : '') + ')</option>';
       }).join('') +
     '</select></div>' +
     '<button class="btn" id="btnAplicar">Aplicar a la selección (<span id="nSel">0</span>)</button>' +
@@ -1221,6 +1249,163 @@ function guardarPermisos() {
   }).catch(function (e) {
     if (!e.sinSesion) { mensaje(e.message, 'error'); $('btnGuardarPerm').disabled = false; }
   });
+}
+
+
+/* ============================================================
+   Vista: cobertura del juzgado
+   ============================================================ */
+function vistaCobertura() {
+  $('vistaGrupo').textContent = 'PROGRAMACIÓN';
+  $('vistaTitulo').textContent = 'Cobertura del juzgado';
+
+  var areas = S.base.areas;
+  if (!areas.length) {
+    $('acciones').innerHTML = '';
+    $('contenido').innerHTML = '<div class="vacio"><p>No hay juzgados activos.</p></div>';
+    return;
+  }
+
+  var sel = S.covFiltro || { idArea: areas[0].id, anio: S.base.anio, mes: S.base.mes };
+  S.covFiltro = sel;
+  var anios = [];
+  for (var a = S.base.anio - 1; a <= S.base.anio + 1; a++) { anios.push(a); }
+
+  $('acciones').innerHTML =
+    '<select id="cArea">' + areas.map(function (x) {
+      return '<option value="' + x.id + '"' + (x.id === sel.idArea ? ' selected' : '') + '>' + esc(x.nombre) + '</option>';
+    }).join('') + '</select>' +
+    '<select id="cMes">' + MESES.map(function (m, i) {
+      return '<option value="' + (i + 1) + '"' + ((i + 1) === sel.mes ? ' selected' : '') + '>' + m + '</option>';
+    }).join('') + '</select>' +
+    '<select id="cAnio">' + anios.map(function (y) {
+      return '<option value="' + y + '"' + (y === sel.anio ? ' selected' : '') + '>' + y + '</option>';
+    }).join('') + '</select>';
+
+  ['cArea', 'cMes', 'cAnio'].forEach(function (id) {
+    $(id).addEventListener('change', cargarCobertura);
+  });
+  cargarCobertura();
+}
+
+function cargarCobertura() {
+  S.covFiltro = { idArea: $('cArea').value, mes: Number($('cMes').value), anio: Number($('cAnio').value) };
+  $('contenido').innerHTML = '<div class="cargando">Calculando la cobertura…</div>';
+  api('cobertura', S.covFiltro).then(function (c) {
+    S.cobertura = c;
+    pintarCobertura();
+  }).catch(function (e) {
+    if (!e.sinSesion) { $('contenido').innerHTML = '<div class="mensaje error">' + esc(e.message) + '</div>'; }
+  });
+}
+
+function pintarCobertura() {
+  var c = S.cobertura;
+  var p = c.panel;
+  var html = '';
+
+  if (!p.controla) {
+    html += '<div class="aviso-admin"><span>Este juzgado no tiene configurado el control de cobertura. ' +
+      'Para activarlo, indica su <strong>cobertura mínima</strong> y su <strong>cargo crítico</strong> ' +
+      'en Maestros → Juzgados y áreas.</span></div>';
+    $('contenido').innerHTML = html;
+    return;
+  }
+
+  // Tarjetas de resumen
+  html += '<div class="tarjetas">' +
+    tarjeta('Cobertura exigida', p.minimo, 'personas del cargo crítico') +
+    tarjeta('Plantilla del mes', p.plantilla, 'incluye reemplazos vigentes') +
+    tarjeta('Días en riesgo', p.diasEnRiesgo,
+      p.diasEnRiesgo ? 'requieren un reemplazo' : 'el mes está cubierto',
+      p.diasEnRiesgo ? 'malo' : 'bueno') +
+    '</div>';
+
+  // Días descubiertos
+  if (p.diasEnRiesgo) {
+    html += '<h3 class="titulo-seccion">Días sin cobertura</h3><div class="tarjeta"><table class="datos">' +
+      '<thead><tr><th>Fecha</th><th>Disponibles</th><th>Quiénes están ausentes</th></tr></thead><tbody>';
+    p.detalle.forEach(function (d) {
+      html += '<tr style="cursor:default"><td class="mono">' + esc(d.fecha) + '</td>' +
+        '<td class="mono">' + d.disponibles + ' de ' + d.requeridos + '</td><td>' +
+        d.ausentes.map(function (a) {
+          return esc(a.nombre) + ' <span class="pastilla no">' + esc(a.motivo) + '</span>';
+        }).join('<br>') + '</td></tr>';
+    });
+    html += '</tbody></table></div>';
+  } else {
+    html += '<div class="aviso-ok"><span>Ningún día del mes queda por debajo de la cobertura mínima.</span></div>';
+  }
+
+  // Reemplazos vigentes
+  html += '<h3 class="titulo-seccion">Reemplazos del mes</h3>';
+  if (c.reemplazos.length) {
+    html += '<div class="tarjeta"><table class="datos"><thead><tr>' +
+      '<th>Volante</th><th>Cubre a</th><th>Desde</th><th>Hasta</th><th>Motivo</th></tr></thead><tbody>';
+    c.reemplazos.forEach(function (r) {
+      html += '<tr style="cursor:default"><td>' + esc(r.volante) + '</td>' +
+        '<td>' + esc(r.cubre || '—') + '</td>' +
+        '<td class="mono">' + esc(r.desde) + '</td><td class="mono">' + esc(r.hasta) + '</td>' +
+        '<td>' + esc(String(r.motivo).replace(/_/g, ' ')) + '</td></tr>';
+    });
+    html += '</tbody></table></div>';
+  } else {
+    html += '<p class="pista">Sin reemplazos registrados este mes.</p>';
+  }
+  if (c.puedeEditar) {
+    html += '<button class="btn primario" style="margin-top:10px" ' +
+            'onclick="irA({tipo:\'tabla\',tabla:\'REEMPLAZO\'})">Registrar un reemplazo</button>';
+  }
+
+  // Turnos de juzgado
+  html += '<h3 class="titulo-seccion">Turnos del juzgado</h3>';
+  if (c.turnosJuzgado.length) {
+    html += '<div class="tarjeta"><table class="datos"><thead><tr>' +
+      '<th>Desde</th><th>Hasta</th><th>Tipo</th></tr></thead><tbody>';
+    c.turnosJuzgado.forEach(function (t) {
+      html += '<tr style="cursor:default"><td class="mono">' + esc(t.desde) + '</td>' +
+        '<td class="mono">' + esc(t.hasta) + '</td><td>' + esc(t.tipo) + '</td></tr>';
+    });
+    html += '</tbody></table></div>';
+  } else {
+    html += '<p class="pista">Este juzgado no está de turno en el mes. ' +
+            'Los feriados liberarán al personal con normalidad.</p>';
+  }
+
+  $('contenido').innerHTML = html;
+  cargarAvisoCompensatorios();
+}
+
+function tarjeta(titulo, valor, pie, tono) {
+  return '<div class="kpi' + (tono ? ' ' + tono : '') + '">' +
+    '<span class="kpi-tit">' + esc(titulo) + '</span>' +
+    '<strong class="kpi-num">' + esc(valor) + '</strong>' +
+    '<span class="kpi-pie">' + esc(pie) + '</span></div>';
+}
+
+/** Aviso de compensatorios próximos a vencer, bajo la vista de cobertura. */
+function cargarAvisoCompensatorios() {
+  api('compensatoriosPorVencer').then(function (lista) {
+    if (!lista.length) { return; }
+    var cont = document.createElement('div');
+    cont.innerHTML = '<h3 class="titulo-seccion">Compensatorios por vencer</h3>' +
+      '<div class="tarjeta"><table class="datos"><thead><tr>' +
+      '<th>Persona</th><th>Generado</th><th>Vence</th><th>Restan</th><th>Día elegido</th><th>Estado</th>' +
+      '</tr></thead><tbody>' +
+      lista.map(function (c) {
+        var urgente = c.diasRestantes <= 3;
+        return '<tr style="cursor:default"><td>' + esc(c.persona) + '</td>' +
+          '<td class="mono">' + esc(c.generado) + '</td>' +
+          '<td class="mono">' + esc(c.vence) + '</td>' +
+          '<td><span class="pastilla ' + (urgente ? 'mal' : 'alerta') + '">' +
+            (c.diasRestantes < 0 ? 'vencido' : c.diasRestantes + ' día(s)') + '</span></td>' +
+          '<td class="mono">' + esc(c.fecha || '—') + '</td>' +
+          '<td>' + pastilla(c.estado) + '</td></tr>';
+      }).join('') + '</tbody></table></div>' +
+      '<p class="pista">Un compensatorio sin usar pasa a VENCIDO automáticamente. ' +
+      'Para elegir el día, entra a Incidencias → Compensatorios.</p>';
+    $('contenido').appendChild(cont);
+  }).catch(function () { /* el aviso es complementario: si falla, no molesta */ });
 }
 
 /* ============================================================
