@@ -86,16 +86,43 @@ function prepararHoja_(hoja, def) {
 function sembrarCatalogos_() {
   var tipos = TIPOS_DIA_SISTEMA_();
   Object.keys(tipos).forEach(function (k) {
-    if (!Db_.buscarPor('TIPO_DIA', 'TIPO_DIA', k)) {
-      Db_.insertarCrudo('TIPO_DIA', {
-        TIPO_DIA: k, ESTADO_TIPO: 'ACTIVO',
-        OBSERVACIONES: 'Tipo del sistema. No renombrar: el motor de reglas lo usa.'
-      });
-    }
+    if (Db_.buscarPor('TIPO_DIA', 'TIPO_DIA', k)) { return; }
+    Db_.insertarCrudo('TIPO_DIA', {
+      TIPO_DIA: k, PRIORIDAD: tipos[k].prioridad, COLOR: tipos[k].color,
+      BLOQUEA_TRABAJO: tipos[k].bloquea ? 'SI' : 'NO', ESTADO_TIPO: 'ACTIVO',
+      OBSERVACIONES: 'Tipo del sistema. No renombrar: el motor de reglas lo usa.'
+    });
   });
 
+  PARAMETROS_DEFECTO_().forEach(function (p) {
+    if (Db_.buscarPor('PARAMETRO', 'CLAVE', p.clave)) { return; }
+    Db_.insertarCrudo('PARAMETRO', {
+      CLAVE: p.clave, VALOR: p.valor, TIPO_DATO: p.tipo,
+      DESCRIPCION: p.desc, ESTADO: 'ACTIVO'
+    });
+  });
+
+  /**
+   * Tipos de licencia: solo los no médicos.
+   * Queda pendiente confirmar si la licencia médica es distinta del descanso
+   * médico; hasta entonces no se siembra ninguna para no duplicar el concepto.
+   */
+  if (Db_.leer('TIPO_LICENCIA').length === 0) {
+    [['SIN GOCE DE HABER', 'NO', 'SI'],
+     ['CAPACITACION', 'SI', 'SI'],
+     ['FALLECIMIENTO DE FAMILIAR', 'SI', 'SI'],
+     ['PATERNIDAD', 'SI', 'SI'],
+     ['MATERNIDAD', 'SI', 'SI'],
+     ['COMISION DE SERVICIO', 'SI', 'SI']].forEach(function (t) {
+      Db_.insertarCrudo('TIPO_LICENCIA', {
+        TIPO_LICENCIA: t[0], ES_REMUNERADA: t[1], REQUIERE_DOCUMENTO: t[2],
+        ESTADO: 'ACTIVO', OBSERVACIONES: ''
+      });
+    });
+  }
+
   if (Db_.leer('CARGO').length === 0) {
-    ['ANALISTA', 'TECNICO', 'SUPERVISOR', 'JEFE DE AREA'].forEach(function (c) {
+    ['SECRETARIO', 'ASISTENTE', 'ESPECIALISTA LEGAL', 'JUEZ'].forEach(function (c) {
       Db_.insertarCrudo('CARGO', { CARGO: c, ESTADO_CARGO: 'ACTIVO', OBSERVACIONES: '' });
     });
   }
@@ -155,8 +182,8 @@ function registrarTriggers_() {
   if (existentes.indexOf('auditarEdicionDirecta') === -1) {
     ScriptApp.newTrigger('auditarEdicionDirecta').forSpreadsheet(ss).onEdit().create();
   }
-  if (existentes.indexOf('limpiarSesiones') === -1) {
-    ScriptApp.newTrigger('limpiarSesiones').timeBased().everyDays(1).atHour(3).create();
+  if (existentes.indexOf('procesoDiario') === -1) {
+    ScriptApp.newTrigger('procesoDiario').timeBased().everyDays(1).atHour(3).create();
   }
 }
 
@@ -223,6 +250,7 @@ function onOpen() {
     .addItem('Generar día de cumpleaños del año', 'generarCumpleaniosDelAnio')
     .addSeparator()
     .addItem('Verificar sistema', 'verificarSistema')
+    .addItem('Migrar a la versión 2.0', 'migrarAVersion2')
     .addItem('Medir coste del cifrado', 'medirCostoHash')
     .addItem('Restablecer contraseña de administrador', 'restablecerClaveAdmin')
     .addToUi();
