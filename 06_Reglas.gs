@@ -80,7 +80,53 @@ var Reglas_ = {
       });
     });
 
+    var tiposLic = {};
+    Db_.leer('TIPO_LICENCIA').forEach(function (t) { tiposLic[t.IDTIPO_LICENCIA] = t.TIPO_LICENCIA; });
+    Db_.leer('LICENCIA').forEach(function (l) {
+      var nivel = nivelDe(l.ESTADO_LICENCIA);
+      if (!nivel) { return; }
+      var f = l.FECHA_INICIO, guarda = 0;
+      while (f && f <= l.FECHA_FIN && guarda++ < 400) {
+        poner(l.IDPERSONAL, f, {
+          tipo: 'LICENCIA', nivel: nivel, estado: l.ESTADO_LICENCIA,
+          id: l.IDLICENCIA,
+          detalle: 'Licencia: ' + (tiposLic[l.IDTIPO_LICENCIA] || '')
+        });
+        f = Utilidades_.sumarDias(f, 1);
+      }
+    });
+
     return mapa;
+  },
+
+  /**
+   * Feriados que aplican a un juzgado en un rango.
+   * Un feriado no libera si el juzgado está de turno esa fecha: en ese caso
+   * precisamente es cuando hay que trabajar (regla 45).
+   */
+  mapaFeriados: function (idArea, desde, hasta) {
+    var mapa = {};
+    Db_.leer('FERIADO').forEach(function (f) {
+      if (String(f.ESTADO).toUpperCase() !== 'ACTIVO') { return; }
+      if (!f.FECHA || f.FECHA < desde || f.FECHA > hasta) { return; }
+      if (String(f.AMBITO).toUpperCase() === 'AREA' && f.IDAREA && f.IDAREA !== idArea) { return; }
+      var deTurno = Reglas_.juzgadoDeTurno(idArea, f.FECHA);
+      mapa[f.FECHA] = {
+        descripcion: f.DESCRIPCION,
+        esLaborable: String(f.ES_LABORABLE).toUpperCase() === 'SI' || deTurno,
+        deTurno: deTurno
+      };
+    });
+    return mapa;
+  },
+
+  /** ¿Está el juzgado de turno en esa fecha? */
+  juzgadoDeTurno: function (idArea, fecha) {
+    return Db_.leer('ROL_TURNO_AREA').some(function (r) {
+      return r.IDAREA === idArea &&
+             String(r.ESTADO).toUpperCase() === 'ACTIVO' &&
+             r.FECHA_INICIO <= fecha && fecha <= r.FECHA_FIN;
+    });
   },
 
   /** Personal vigente en un área durante el rango indicado. */
@@ -148,11 +194,25 @@ var Reglas_ = {
     }
 
     if (tabla === 'COMPENSATORIO') {
+      var estC = String(d.ESTADO_COMPENSATORIO).toUpperCase();
       if (d.FECHA_COMPENSATORIO && F(d.FECHA_COMPENSATORIO) < F(d.FECHA_GENERACION)) {
         e.push('El día compensatorio no puede ser anterior a la fecha que lo generó.');
       }
-      if (String(d.ESTADO_COMPENSATORIO).toUpperCase() === 'APROBADO' && !d.FECHA_COMPENSATORIO) {
-        e.push('Para aprobar un compensatorio debes indicar la fecha en que se tomará.');
+      if ((estC === 'PROGRAMADO' || estC === 'USADO') && !d.FECHA_COMPENSATORIO) {
+        e.push('Para programar un compensatorio debes indicar la fecha en que se tomará.');
+      }
+      // Regla 42: no se puede usar fuera de su vigencia.
+      if (estC === 'PROGRAMADO' && d.FECHA_COMPENSATORIO && d.FECHA_VENCIMIENTO &&
+          F(d.FECHA_COMPENSATORIO) > d.FECHA_VENCIMIENTO) {
+        e.push('Ese compensatorio vence el ' + d.FECHA_VENCIMIENTO +
+               ': elige una fecha anterior o solicita una prórroga.');
+      }
+      // Regla 43: un compensatorio usado queda ligado a su día y no se reutiliza.
+      if (d.IDCALENDARIO_USO) {
+        var yaLigado = Db_.leer('COMPENSATORIO').some(function (r) {
+          return r.IDCOMPENSATORIO !== idActual && r.IDCALENDARIO_USO === d.IDCALENDARIO_USO;
+        });
+        if (yaLigado) { e.push('Ese día del calendario ya consumió otro compensatorio.'); }
       }
     }
 
@@ -186,9 +246,45 @@ var Reglas_ = {
       if (dup) { e.push('Ese turno ya está habilitado para el área.'); }
     }
 
+    if (tabla === 'LICENCIA') {
+      if (F(d.FECHA_FIN) < F(d.FECHA_INICIO)) { e.push('La fecha fin no puede ser anterior al inicio.'); }
+      e = e.concat(this._solapa('LICENCIA', 'IDLICENCIA', d.IDPERSONAL,
+        F(d.FECHA_INICIO), F(d.FECHA_FIN), idActual, 'ESTADO_LICENCIA', 'otra licencia'));
+    }
+
+    if (tabla === 'FERIADO') {
+      var dupF = Db_.leer('FERIADO').some(function (r) {
+        return r.IDFERIADO !== idActual && r.FECHA === F(d.FECHA) &&
+               String(r.AMBITO).toUpperCase() === String(d.AMBITO).toUpperCase() &&
+               (r.IDAREA || '') === (d.IDAREA || '') &&
+               String(r.ESTADO).toUpperCase() === 'ACTIVO';
+      });
+      if (dupF) { e.push('Ya existe un feriado registrado esa fecha para el mismo ámbito.'); }
+      if (String(d.AMBITO).toUpperCase() === 'AREA' && !d.IDAREA) {
+        e.push('Un feriado de ámbito ÁREA necesita indicar el juzgado.');
+      }
+    }
+
+    if (tabla === 'ROL_TURNO_AREA') {
+      if (F(d.FECHA_FIN) < F(d.FECHA_INICIO)) { e.push('La fecha fin no puede ser anterior al inicio.'); }
+      var choqueRol = Db_.leer('ROL_TURNO_AREA').some(function (r) {
+        return r.IDROL_TURNO !== idActual && r.IDAREA === d.IDAREA &&
+               String(r.ESTADO).toUpperCase() === 'ACTIVO' &&
+               F(d.FECHA_INICIO) <= r.FECHA_FIN && r.FECHA_INICIO <= F(d.FECHA_FIN);
+      });
+      if (choqueRol) { e.push('Ese juzgado ya tiene un turno registrado que se cruza con ese período.'); }
+    }
+
+    if (tabla === 'REEMPLAZO') {
+      e = e.concat(Cobertura_.validarReemplazo(d, idActual));
+    }
+
     if (tabla === 'CALENDARIO_PERSONAL') {
       e = e.concat(this.validarProgramacion(d, idActual));
     }
+
+    // Regla 40: ninguna ausencia puede dejar al juzgado bajo su cobertura mínima.
+    e = e.concat(Cobertura_.validarAusencia(tabla, d, idActual));
 
     return e;
   },
@@ -205,6 +301,50 @@ var Reglas_ = {
              String(r.ESTADO_PROGRAMACION).toUpperCase() !== 'ANULADO';
     });
     if (duplicado) { e.push('Esa persona ya tiene una programación vigente el ' + fecha + '.'); }
+
+    // Regla 4: nadie recibe programación posterior a su cese.
+    var persona = Db_.buscarPorId('PERSONAL', d.IDPERSONAL);
+    if (persona) {
+      if (String(persona.ESTADO_PERSONAL).toUpperCase() !== 'ACTIVO') {
+        e.push('La persona está en estado ' + persona.ESTADO_PERSONAL + ' y no puede ser programada.');
+      }
+      if (persona.FECHA_CESE && fecha > persona.FECHA_CESE) {
+        e.push('La persona cesó el ' + persona.FECHA_CESE + ': no admite programación posterior.');
+      }
+    }
+
+    /**
+     * Regla 44: solapamiento real de horas. Comparar solo por fecha no basta con
+     * turnos de 24 horas: el de 08:00 del 07/08 termina a las 07:59 del 08/08 e
+     * invade el día siguiente.
+     */
+    if (d.IDTURNO) {
+      var turnoNuevo = Db_.buscarPorId('TURNO', d.IDTURNO);
+      if (turnoNuevo && turnoNuevo.HORA_INICIO && turnoNuevo.HORA_FIN) {
+        var cruzaN = Utilidades_.aMinutos(turnoNuevo.HORA_FIN) <= Utilidades_.aMinutos(turnoNuevo.HORA_INICIO);
+        var iniN = fecha + ' ' + turnoNuevo.HORA_INICIO + ':00';
+        var finN = (cruzaN ? Utilidades_.sumarDias(fecha, 1) : fecha) + ' ' + turnoNuevo.HORA_FIN + ':00';
+
+        var vecinos = Db_.leer('CALENDARIO_PERSONAL').filter(function (r) {
+          if (r.IDCALENDARIO_PERSONAL === idActual) { return false; }
+          if (r.IDPERSONAL !== d.IDPERSONAL) { return false; }
+          if (String(r.ESTADO_PROGRAMACION).toUpperCase() === 'ANULADO') { return false; }
+          if (!r.INICIO_PROGRAMADO || !r.FIN_PROGRAMADO) { return false; }
+          var dif = Math.abs(Utilidades_.diasEntre(r.FECHA_CALENDARIO, fecha));
+          return dif <= 2;
+        });
+
+        var choqueH = vecinos.filter(function (r) {
+          return Utilidades_.solapan(iniN, finN, r.INICIO_PROGRAMADO, r.FIN_PROGRAMADO);
+        })[0];
+
+        if (choqueH) {
+          e.push('El horario se cruza con la programación del ' + choqueH.FECHA_CALENDARIO +
+                 ' (' + choqueH.INICIO_PROGRAMADO.substring(11, 16) + ' a ' +
+                 choqueH.FIN_PROGRAMADO.substring(11, 16) + ').');
+        }
+      }
+    }
 
     var asignado = Db_.leer('PERSONAL_AREA').some(function (r) {
       return r.IDPERSONAL === d.IDPERSONAL && r.IDAREA === d.IDAREA &&
