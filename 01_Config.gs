@@ -157,6 +157,17 @@ function TIPOS_DIA_SISTEMA_() {
   };
 }
 
+/**
+ * Funciones del secretario que se siembran al instalar.
+ * Es un catálogo editable: se pueden agregar más desde el panel.
+ */
+function FUNCIONES_INICIALES_() {
+  return [
+    { nombre: 'TRAMITE', abrev: 'TRA', color: '#1F5F8B', nota: 'Apertura de expediente' },
+    { nombre: 'EJECUCION', abrev: 'EJE', color: '#7A5AA8', nota: 'Seguimiento de expediente' }
+  ];
+}
+
 /** Módulos sobre los que se otorgan permisos. */
 function MODULOS_() {
   return {
@@ -177,7 +188,8 @@ function MODULOS_() {
       acciones: ['VER', 'CREAR', 'EDITAR', 'ANULAR'],
       nota: 'Legajo del personal y su asignación a juzgados.' },
     MAESTROS: { etiqueta: 'Maestros', orden: 5,
-      tablas: ['CARGO', 'AREA', 'TURNO', 'AREA_TURNO', 'TIPO_DIA', 'FERIADO', 'TIPO_LICENCIA'],
+      tablas: ['CARGO', 'AREA', 'FUNCION', 'COBERTURA_AREA', 'TURNO', 'AREA_TURNO',
+               'TIPO_DIA', 'FERIADO', 'TIPO_LICENCIA'],
       acciones: ['VER', 'CREAR', 'EDITAR', 'ANULAR'],
       nota: 'Catálogos base: cargos, juzgados, turnos, tipos de día y feriados.' },
     REPORTES: { etiqueta: 'Reportes', orden: 6,
@@ -274,6 +286,7 @@ function ESQUEMA_() {
         { c: 'IDPERSONAL_AREA', t: 'texto', pk: true },
         { c: 'IDPERSONAL', t: 'ref', ref: 'PERSONAL', req: true },
         { c: 'IDAREA', t: 'ref', ref: 'AREA', req: true },
+        { c: 'IDFUNCION', t: 'ref', ref: 'FUNCION' },
         { c: 'FECHA_INICIO', t: 'fecha', req: true },
         { c: 'FECHA_FIN', t: 'fecha' },
         { c: 'ESTADO', t: 'lista', ops: C.ESTADO_GENERAL, req: true, def: 'ACTIVO' },
@@ -340,6 +353,33 @@ function ESQUEMA_() {
       ]
     },
 
+    FUNCION: {
+      hoja: 'FUNCION', pk: 'IDFUNCION', prefijo: 'FUN', etiqueta: 'Funciones del secretario',
+      grupo: 'Maestros', muestra: ['FUNCION'], estado: 'ESTADO',
+      campos: [
+        { c: 'IDFUNCION', t: 'texto', pk: true },
+        { c: 'FUNCION', t: 'texto', req: true, unico: true },
+        { c: 'ABREVIATURA', t: 'texto', req: true, largoMax: 3 },
+        { c: 'COLOR', t: 'texto', req: true, def: '#1F5F8B' },
+        { c: 'ESTADO', t: 'lista', ops: C.ESTADO_GENERAL, req: true, def: 'ACTIVO' },
+        { c: 'OBSERVACIONES', t: 'textoLargo' }
+      ]
+    },
+
+    COBERTURA_AREA: {
+      hoja: 'COBERTURA_AREA', pk: 'IDCOBERTURA', prefijo: 'COB',
+      etiqueta: 'Cobertura por función', grupo: 'Maestros',
+      muestra: ['IDAREA', 'IDFUNCION'], estado: 'ESTADO',
+      campos: [
+        { c: 'IDCOBERTURA', t: 'texto', pk: true },
+        { c: 'IDAREA', t: 'ref', ref: 'AREA', req: true },
+        { c: 'IDFUNCION', t: 'ref', ref: 'FUNCION', req: true },
+        { c: 'MINIMO', t: 'numero', req: true, def: 1, min: 0, max: 50 },
+        { c: 'ESTADO', t: 'lista', ops: C.ESTADO_GENERAL, req: true, def: 'ACTIVO' },
+        { c: 'OBSERVACIONES', t: 'textoLargo' }
+      ]
+    },
+
     TIPO_LICENCIA: {
       hoja: 'TIPO_LICENCIA', pk: 'IDTIPO_LICENCIA', prefijo: 'TLI',
       etiqueta: 'Tipos de licencia', grupo: 'Maestros',
@@ -366,6 +406,7 @@ function ESQUEMA_() {
         { c: 'IDAREA', t: 'ref', ref: 'AREA', req: true },
         { c: 'IDTURNO', t: 'ref', ref: 'TURNO' },
         { c: 'IDTIPO_DIA', t: 'ref', ref: 'TIPO_DIA', req: true },
+        { c: 'IDFUNCION', t: 'ref', ref: 'FUNCION' },
         { c: 'FECHA_CALENDARIO', t: 'fecha', req: true },
         { c: 'INICIO_PROGRAMADO', t: 'fechaHora', calculado: true },
         { c: 'FIN_PROGRAMADO', t: 'fechaHora', calculado: true },
@@ -398,6 +439,7 @@ function ESQUEMA_() {
         { c: 'IDREEMPLAZO', t: 'texto', pk: true },
         { c: 'IDPERSONAL_VOLANTE', t: 'ref', ref: 'PERSONAL', req: true },
         { c: 'IDAREA', t: 'ref', ref: 'AREA', req: true },
+        { c: 'IDFUNCION', t: 'ref', ref: 'FUNCION' },
         { c: 'IDPERSONAL_CUBIERTO', t: 'ref', ref: 'PERSONAL' },
         { c: 'FECHA_INICIO', t: 'fecha', req: true },
         { c: 'FECHA_FIN', t: 'fecha', req: true },
@@ -614,7 +656,8 @@ function ESQUEMA_() {
 
 /** Orden en que se crean las hojas. Respeta las dependencias entre tablas. */
 function ORDEN_HOJAS_() {
-  return ['CARGO', 'AREA', 'TURNO', 'AREA_TURNO', 'TIPO_DIA', 'FERIADO', 'TIPO_LICENCIA',
+  return ['CARGO', 'AREA', 'FUNCION', 'COBERTURA_AREA', 'TURNO', 'AREA_TURNO',
+          'TIPO_DIA', 'FERIADO', 'TIPO_LICENCIA',
           'PERSONAL', 'PERSONAL_AREA', 'CALENDARIO_PERSONAL', 'ROL_TURNO_AREA', 'REEMPLAZO',
           'VACACIONES', 'DESCANSO_MEDICO', 'COMPENSATORIO', 'LICENCIA', 'CUMPLEANIOS',
           'USUARIO', 'CREDENCIAL', 'SESION', 'PERMISO', 'PARAMETRO', 'AUDITORIA'];
