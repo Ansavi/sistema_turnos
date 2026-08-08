@@ -22,11 +22,26 @@ function migrarAVersion2() {
   // 2. Valores por defecto en las columnas nuevas.
   rellenarValoresPorDefecto_(anotar);
 
+  SpreadsheetApp.flush();
+
   // 3. Catálogos: tipos de día con prioridad, parámetros, permisos de módulos nuevos.
   actualizarCatalogos_(anotar);
 
   // 4. Recalcula lo derivado sobre los datos que ya existían.
   recalcularDerivados_(anotar);
+
+  /**
+   * 5. Reordena las columnas para que coincidan con el esquema.
+   * Añadirlas al final no basta: la capa de datos lee por posición, así que una
+   * columna nueva declarada en medio del esquema pero escrita al final hace que
+   * todo lo que va después se lea corrido. Debe ir al final del proceso, cuando
+   * ya están creadas todas las columnas.
+   */
+  anotar('Verificando el orden de las columnas…');
+  var reordenadas = repararOrdenColumnas(anotar);
+  if (reordenadas.length) {
+    anotar('Hojas reordenadas: ' + reordenadas.length);
+  }
 
   var texto = 'MIGRACIÓN A LA VERSIÓN 2.0\n' + '='.repeat(46) + '\n' +
               pasos.join('\n') + '\n' + '='.repeat(46) +
@@ -67,15 +82,53 @@ function repararEstructura_(anotar) {
                        .filter(function (v) { return v !== ''; });
 
     var faltantes = esperados.filter(function (c) { return actuales.indexOf(c) === -1; });
-    if (!faltantes.length) { return; }
+    if (faltantes.length) {
+      // Se añaden al final: así no se desplaza ninguna columna con datos.
+      hoja.getRange(1, actuales.length + 1, 1, faltantes.length).setValues([faltantes])
+          .setFontWeight('bold').setBackground('#16202B').setFontColor('#FFFFFF');
+      anotar('Columnas añadidas a ' + def.hoja + ': ' + faltantes.join(', '));
+    }
 
-    // Se añaden al final: así no se desplaza ninguna columna con datos.
-    hoja.getRange(1, actuales.length + 1, 1, faltantes.length).setValues([faltantes])
-        .setFontWeight('bold').setBackground('#16202B').setFontColor('#FFFFFF');
-    anotar('Columnas añadidas a ' + def.hoja + ': ' + faltantes.join(', '));
+    // Siempre, haya columnas nuevas o no: las listas desplegables de la versión
+    // anterior siguen vigentes y rechazarían los valores nuevos.
+    var ajustadas = actualizarValidaciones_(hoja, def);
+    if (ajustadas.length) {
+      anotar('Listas desplegables actualizadas en ' + def.hoja + ': ' + ajustadas.join(', '));
+    }
   });
 
+  SpreadsheetApp.flush();
   return creadas;
+}
+
+/**
+ * Reaplica las listas desplegables de cada columna según el esquema vigente.
+ *
+ * Es imprescindible antes de escribir nada: Sheets guarda la regla de validación
+ * dentro de la hoja, así que una columna creada por la versión 1 sigue aceptando
+ * solo los valores de entonces. Al intentar escribir OPERADOR en NIVEL_ACCESO, o
+ * CESADO en ESTADO_PERSONAL, la hoja los rechaza y la migración se detiene.
+ *
+ * El error además aparece desplazado: Apps Script agrupa las escrituras y la
+ * excepción salta en la siguiente lectura, señalando una línea que no es la culpable.
+ */
+function actualizarValidaciones_(hoja, def) {
+  var filas = Math.max(hoja.getMaxRows() - 1, 1);
+  var ajustadas = [];
+
+  def.campos.forEach(function (f, i) {
+    if (f.t !== 'lista' || !f.ops || !f.ops.length) { return; }
+    var rango = hoja.getRange(2, i + 1, filas, 1);
+    rango.setDataValidation(
+      SpreadsheetApp.newDataValidation()
+        .requireValueInList(f.ops, true)
+        .setAllowInvalid(false)
+        .setHelpText('Valores permitidos: ' + f.ops.join(', '))
+        .build());
+    ajustadas.push(f.c);
+  });
+
+  return ajustadas;
 }
 
 /** Rellena las columnas nuevas de las filas que ya existían. */
