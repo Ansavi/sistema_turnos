@@ -161,8 +161,11 @@ var Permisos_ = {
           valores.ESTADO = 'ACTIVO';
           valores.OBSERVACIONES = '';
           var nueva = Seg_.crear('PERMISO', valores);
+          var otorgadas = ['VER', 'CREAR', 'EDITAR', 'ANULAR', 'PUBLICAR', 'ADMINISTRAR']
+            .filter(function (a) { return valores[a] === 'SI'; });
           Auditoria_.registrar(ctx, 'PERMISOS', 'PERMISO', nueva.IDPERMISO, nivel + '/' + modulo,
-            '', JSON.stringify(valores), 'OK', 'Fila de permisos creada');
+            'sin permisos', otorgadas.length ? otorgadas.join(', ') : 'sin permisos',
+            'OK', 'Fila de permisos creada');
           aplicados++;
           return;
         }
