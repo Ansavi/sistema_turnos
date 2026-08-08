@@ -265,6 +265,117 @@ var ENRUTADOR_ = {
   auditoria: function (ctx, d) {
     Permisos_.exigir(ctx, 'AUDITORIA', 'VER');
     return Auditoria_.consultar(d.filtros || {});
+  },
+
+  /* ---------- Cobertura ---------- */
+
+  /** Estado de cobertura de un juzgado en un mes, para la pantalla de riesgo. */
+  cobertura: function (ctx, d) {
+    Permisos_.exigir(ctx, 'COBERTURA', 'VER');
+    var dias = Utilidades_.diasDelMes(Number(d.anio), Number(d.mes));
+    var desde = dias[0], hasta = dias[dias.length - 1];
+
+    var panel = Cobertura_.panel(d.idArea, desde, hasta);
+    var personas = {};
+    Db_.leer('PERSONAL').forEach(function (p) {
+      personas[p.IDPERSONAL] = p.APELLIDOS + ', ' + p.NOMBRES;
+    });
+
+    var reemplazos = Db_.leer('REEMPLAZO').filter(function (r) {
+      return r.IDAREA === d.idArea &&
+             String(r.ESTADO).toUpperCase() === 'ACTIVO' &&
+             r.FECHA_INICIO <= hasta && r.FECHA_FIN >= desde;
+    }).map(function (r) {
+      return {
+        id: r.IDREEMPLAZO,
+        volante: personas[r.IDPERSONAL_VOLANTE] || r.IDPERSONAL_VOLANTE,
+        cubre: r.IDPERSONAL_CUBIERTO ? (personas[r.IDPERSONAL_CUBIERTO] || '') : '',
+        desde: r.FECHA_INICIO, hasta: r.FECHA_FIN, motivo: r.MOTIVO
+      };
+    });
+
+    var turnosJuzgado = Db_.leer('ROL_TURNO_AREA').filter(function (r) {
+      return r.IDAREA === d.idArea && String(r.ESTADO).toUpperCase() === 'ACTIVO' &&
+             r.FECHA_INICIO <= hasta && r.FECHA_FIN >= desde;
+    }).map(function (r) {
+      return { id: r.IDROL_TURNO, desde: r.FECHA_INICIO, hasta: r.FECHA_FIN, tipo: r.TIPO };
+    });
+
+    return {
+      idArea: d.idArea, anio: Number(d.anio), mes: Number(d.mes),
+      panel: panel,
+      reemplazos: reemplazos,
+      turnosJuzgado: turnosJuzgado,
+      puedeEditar: Permisos_.puede(ctx, 'COBERTURA', 'CREAR')
+    };
+  },
+
+  /**
+   * Simula una ausencia sin guardarla: responde si dejaría el juzgado descubierto.
+   * Permite avisar mientras la persona llena el formulario, en vez de rechazarla
+   * al final cuando ya escribió todo.
+   */
+  simularAusencia: function (ctx, d) {
+    Permisos_.exigir(ctx, 'INCIDENCIAS', 'VER');
+    var idArea = Cobertura_.areaDe(d.idPersonal, d.desde);
+    if (!idArea) { return { controla: false, mensaje: 'La persona no está asignada a un juzgado en esa fecha.' }; }
+
+    var r = Cobertura_.evaluar(idArea, d.desde, d.hasta,
+      { idPersonal: d.idPersonal, desde: d.desde, hasta: d.hasta, etiqueta: d.etiqueta || 'esta ausencia' },
+      d.excluir ? { tabla: d.tabla, id: d.excluir } : null);
+
+    return {
+      controla: r.controla,
+      conflictos: r.conflictos,
+      juzgado: r.juzgado,
+      minimo: r.minimo,
+      mensaje: (r.controla && r.conflictos.length) ? Cobertura_.mensaje(r) : ''
+    };
+  },
+
+  /* ---------- Compensatorios ---------- */
+
+  /** Compensatorios por vencer y vencidos, para el aviso del panel. */
+  compensatoriosPorVencer: function (ctx) {
+    Permisos_.exigir(ctx, 'INCIDENCIAS', 'VER');
+    var hoy = Utilidades_.hoyISO();
+    var limite = Utilidades_.sumarDias(hoy, PARAM_NUM_('DIAS_AVISO_VENCIMIENTO'));
+    var personas = {};
+    Db_.leer('PERSONAL').forEach(function (p) {
+      personas[p.IDPERSONAL] = p.APELLIDOS + ', ' + p.NOMBRES;
+    });
+
+    return Db_.leer('COMPENSATORIO').filter(function (c) {
+      var est = String(c.ESTADO_COMPENSATORIO).toUpperCase();
+      if (est !== 'PENDIENTE' && est !== 'PROGRAMADO') { return false; }
+      return c.FECHA_VENCIMIENTO && c.FECHA_VENCIMIENTO <= limite;
+    }).map(function (c) {
+      return {
+        id: c.IDCOMPENSATORIO,
+        persona: personas[c.IDPERSONAL] || c.IDPERSONAL,
+        generado: c.FECHA_GENERACION,
+        vence: c.FECHA_VENCIMIENTO,
+        fecha: c.FECHA_COMPENSATORIO || '',
+        estado: c.ESTADO_COMPENSATORIO,
+        diasRestantes: Utilidades_.diasEntre(hoy, c.FECHA_VENCIMIENTO) - 1
+      };
+    }).sort(function (a, b) { return a.vence.localeCompare(b.vence); });
+  },
+
+  /** Programa el día elegido por la persona. Pasa a PROGRAMADO. */
+  programarCompensatorio: function (ctx, d) {
+    Permisos_.exigir(ctx, 'INCIDENCIAS', 'EDITAR');
+    return Db_.actualizar('COMPENSATORIO', d.id, {
+      FECHA_COMPENSATORIO: d.fecha, ESTADO_COMPENSATORIO: 'PROGRAMADO'
+    }, ctx);
+  },
+
+  /** Devuelve el compensatorio a PENDIENTE conservando su vencimiento original. */
+  liberarCompensatorio: function (ctx, d) {
+    Permisos_.exigir(ctx, 'INCIDENCIAS', 'EDITAR');
+    return Db_.actualizar('COMPENSATORIO', d.id, {
+      FECHA_COMPENSATORIO: '', ESTADO_COMPENSATORIO: 'PENDIENTE', IDCALENDARIO_USO: ''
+    }, ctx);
   }
 };
 
