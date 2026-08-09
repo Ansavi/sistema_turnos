@@ -227,6 +227,22 @@ var ENRUTADOR_ = {
     return Calendario_.publicarMes(ctx, d.idArea, Number(d.anio), Number(d.mes));
   },
 
+  /** Tablero de una semana: siete días desde la fecha indicada. */
+  tableroSemana: function (ctx, d) {
+    var desde = Utilidades_.aISO(d.desde);
+    return Calendario_.tableroRango(ctx, d.idArea, desde, Utilidades_.sumarDias(desde, 6));
+  },
+
+  /** Parte del día: quién trabaja, quién descansa y quién está ausente. */
+  vistaDia: function (ctx, d) {
+    return Calendario_.vistaDia(ctx, d.idArea, d.fecha);
+  },
+
+  /** Sello del rango, para detectar que otra persona modificó la programación. */
+  sello: function (ctx, d) {
+    return Calendario_.sello(ctx, d.idArea, Utilidades_.aISO(d.desde), Utilidades_.aISO(d.hasta));
+  },
+
   disponibilidad: function (ctx, d) {
     var mapa = Reglas_.mapaAusencias(d.desde, d.hasta);
     return mapa[d.idPersonal] || {};
