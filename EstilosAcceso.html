@@ -245,4 +245,21 @@ table.matriz td.na{color:#C3CBD5;font-family:var(--mono);font-size:11px}
 }
 .nav-periodo strong{flex:1;text-align:center;font-size:14px;letter-spacing:-.01em}
 .nav-periodo input[type=date]{margin-left:auto}
+
+/* ---------- Alertas del panel de inicio ---------- */
+.alertas{display:flex;flex-direction:column;gap:6px}
+.alerta{
+  display:flex;align-items:center;gap:12px;padding:9px 12px;
+  background:var(--superficie);border:1px solid var(--linea);
+  border-left-width:3px;border-radius:0 var(--r) var(--r) 0;font-size:13px;
+}
+.alerta.n-alta{border-left-color:var(--rojo)}
+.alerta.n-media{border-left-color:var(--ambar)}
+.alerta.n-baja{border-left-color:var(--gris)}
+.alerta-tipo{
+  font-family:var(--mono);font-size:9px;letter-spacing:.09em;color:var(--texto-tenue);
+  min-width:92px;text-transform:uppercase;
+}
+.alerta-txt{flex:1}
+.alerta-btn{padding:3px 11px;font-size:12px}
 </style>
