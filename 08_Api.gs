@@ -227,6 +227,11 @@ var ENRUTADOR_ = {
     return Calendario_.publicarMes(ctx, d.idArea, Number(d.anio), Number(d.mes));
   },
 
+  /** Dashboard: indicadores, alertas y resúmenes del día. */
+  panel: function (ctx, d) {
+    return Panel_.resumen(ctx, d || {});
+  },
+
   /** Tablero de una semana: siete días desde la fecha indicada. */
   tableroSemana: function (ctx, d) {
     var desde = Utilidades_.aISO(d.desde);
