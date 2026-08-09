@@ -376,6 +376,28 @@ var ENRUTADOR_ = {
     return Db_.actualizar('COMPENSATORIO', d.id, {
       FECHA_COMPENSATORIO: '', ESTADO_COMPENSATORIO: 'PENDIENTE', IDCALENDARIO_USO: ''
     }, ctx);
+  },
+
+  /* ---------- Programación masiva ---------- */
+
+  opcionesProgramacion: function (ctx, d) {
+    return Programacion_.opciones(ctx, d.idArea, d.anio, d.mes);
+  },
+
+  programarRango: function (ctx, d) {
+    return Programacion_.porRango(ctx, d);
+  },
+
+  programarPatron: function (ctx, d) {
+    return Programacion_.porPatron(ctx, d);
+  },
+
+  copiarMes: function (ctx, d) {
+    return Programacion_.copiarMes(ctx, d);
+  },
+
+  limpiarRango: function (ctx, d) {
+    return Programacion_.limpiarRango(ctx, d);
   }
 };
 
