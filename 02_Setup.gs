@@ -201,6 +201,7 @@ function onOpen() {
     .addItem('Instalar / reparar estructura', 'instalar')
     .addItem('Migrar a la versión 2', 'migrarAVersion2')
     .addItem('Verificar sistema', 'verificarSistema')
+    .addItem('Ejecutar casos de prueba', 'ejecutarPruebas')
     .addSeparator()
     .addItem('Generar día de cumpleaños del año', 'generarCumpleaniosDelAnio')
     .addSeparator()
