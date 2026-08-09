@@ -6,12 +6,29 @@
 
 var Calendario_ = {
 
-  /** Tablero completo listo para pintar en la web. */
+  /** Tablero de un mes. Es el caso habitual; por debajo usa el de rango. */
   tablero: function (ctx, idArea, anio, mes) {
+    var dias = Utilidades_.diasDelMes(anio, mes);
+    var t = this.tableroRango(ctx, idArea, dias[0], dias[dias.length - 1]);
+    t.anio = anio;
+    t.mes = mes;
+    return t;
+  },
+
+  /**
+   * Tablero de un rango arbitrario de fechas.
+   * La vista semanal y la mensual comparten este código: una semana es un rango
+   * de siete días y un mes uno de treinta, no hay razón para tener dos motores.
+   */
+  tableroRango: function (ctx, idArea, desde, hasta) {
     Auth_.exigirLectura(ctx, 'CALENDARIO_PERSONAL');
 
-    var dias = Utilidades_.diasDelMes(anio, mes);
-    var desde = dias[0], hasta = dias[dias.length - 1];
+    var dias = [];
+    var cursor = desde, guarda = 0;
+    while (cursor <= hasta && guarda++ < 400) {
+      dias.push(cursor);
+      cursor = Utilidades_.sumarDias(cursor, 1);
+    }
 
     var personal = Reglas_.personalDeArea(idArea, desde, hasta);
     var turnos = Reglas_.turnosDeArea(idArea);
@@ -88,7 +105,7 @@ var Calendario_ = {
     });
 
     return {
-      idArea: idArea, anio: anio, mes: mes, dias: dias,
+      idArea: idArea, desde: desde, hasta: hasta, dias: dias,
       diasSemana: dias.map(function (f) { return Utilidades_.diaSemana(f).substring(0, 3); }),
       finDeSemana: dias.map(function (f) { return Utilidades_.esFinDeSemana(f); }),
       turnos: turnos.map(function (t) {
@@ -108,10 +125,93 @@ var Calendario_ = {
                  esLaborable: feriados[f].esLaborable, deTurno: feriados[f].deTurno };
       }),
       cobertura: cobertura,
-      advertencias: Reglas_.advertenciasDeMes(idArea, anio, mes),
+      advertencias: Reglas_.advertenciasDeRango(idArea, desde, hasta),
       puedeEditar: Auth_.puedeEscribir(ctx, 'CALENDARIO_PERSONAL'),
       puedePublicar: !!ctx.permisos.publicar
     };
+  },
+
+  /**
+   * Quién trabaja hoy, quién falta y por qué. Es la vista de consulta diaria:
+   * responde de un vistazo la pregunta operativa del día sin leer una rejilla.
+   */
+  vistaDia: function (ctx, idArea, fecha) {
+    Auth_.exigirLectura(ctx, 'CALENDARIO_PERSONAL');
+    fecha = Utilidades_.aISO(fecha);
+
+    var t = this.tableroRango(ctx, idArea, fecha, fecha);
+    var turnos = {};
+    t.turnos.forEach(function (x) { turnos[x.id] = x; });
+    var funciones = {};
+    (t.funciones || []).forEach(function (f) { funciones[f.id] = f; });
+
+    var trabajan = [], ausentes = [], descansan = [], sinProgramar = [];
+
+    t.filas.forEach(function (fila) {
+      var c = fila.celdas[0];
+      var base = { idPersonal: fila.idPersonal, persona: fila.persona };
+
+      if (!c.tipo) {
+        if (!c.bloqueada) { sinProgramar.push(base); return; }
+        // Sin programar pero bloqueada: la ausencia manda aunque nadie la haya pintado.
+        ausentes.push({
+          idPersonal: fila.idPersonal, persona: fila.persona,
+          tipo: c.ausencia ? c.ausencia.tipo : 'NO DISPONIBLE',
+          motivo: c.motivo || (c.ausencia ? c.ausencia.detalle : '')
+        });
+        return;
+      }
+      if (c.tipo === 'TRABAJO') {
+        var tu = turnos[c.idTurno] || {};
+        trabajan.push(Object.assign({}, base, {
+          turno: tu.nombre || '', inicio: c.inicio, fin: c.fin, cruzaDia: c.cruzaDia,
+          funcion: c.idFuncion && funciones[c.idFuncion] ? funciones[c.idFuncion].nombre : '',
+          estado: c.estado
+        }));
+      } else if (c.tipo === 'DESCANSO') {
+        descansan.push(Object.assign({}, base, { tipo: c.tipo }));
+      } else {
+        ausentes.push(Object.assign({}, base, {
+          tipo: c.tipo,
+          motivo: c.motivo || (c.ausencia ? c.ausencia.detalle : '')
+        }));
+      }
+    });
+
+    // Orden por hora de entrada: es como se lee un parte diario.
+    trabajan.sort(function (a, b) { return String(a.inicio).localeCompare(String(b.inicio)); });
+
+    return {
+      fecha: fecha,
+      diaSemana: Utilidades_.diaSemana(fecha),
+      esFinDeSemana: Utilidades_.esFinDeSemana(fecha),
+      feriado: (t.feriados || []).filter(function (f) { return f.fecha === fecha; })[0] || null,
+      deTurno: Reglas_.juzgadoDeTurno(idArea, fecha),
+      trabajan: trabajan,
+      descansan: descansan,
+      ausentes: ausentes,
+      sinProgramar: sinProgramar,
+      cobertura: t.cobertura,
+      total: t.filas.length
+    };
+  },
+
+  /**
+   * Sello del estado de un rango: cuántos registros hay y cuál se tocó por última
+   * vez. El panel lo consulta cada tanto y, si cambió, avisa de que otra persona
+   * modificó la programación. Es lo más cercano a tiempo real que permite Apps
+   * Script, que no tiene notificaciones desde el servidor.
+   */
+  sello: function (ctx, idArea, desde, hasta) {
+    var n = 0, ultima = '';
+    Db_.leer('CALENDARIO_PERSONAL').forEach(function (r) {
+      if (r.IDAREA !== idArea) { return; }
+      if (r.FECHA_CALENDARIO < desde || r.FECHA_CALENDARIO > hasta) { return; }
+      n++;
+      var m = String(r.FECHA_MODIFICACION || '');
+      if (m > ultima) { ultima = m; }
+    });
+    return { registros: n, ultimaModificacion: ultima, sello: n + '|' + ultima };
   },
 
   _resumen: function (filas, tipos) {
@@ -151,6 +251,15 @@ var Calendario_ = {
         };
         if (c.id) {
           var actual = Db_.buscarPorId('CALENDARIO_PERSONAL', c.id);
+          /**
+           * Bloqueo optimista: si la celda cambió desde que se cargó la pantalla,
+           * se rechaza en vez de pisar el trabajo de otra persona en silencio.
+           * Solo aplica si el cliente envió la versión que tenía a la vista.
+           */
+          if (actual && c.version && Number(actual.VERSION || 1) !== Number(c.version)) {
+            throw new Error('Otra persona modificó este día mientras editabas. ' +
+                            'Actualiza la vista para ver los cambios.');
+          }
           datos.ESTADO_PROGRAMACION = actual ? actual.ESTADO_PROGRAMACION : 'BORRADOR';
           Db_.actualizar('CALENDARIO_PERSONAL', c.id, datos, ctx);
         } else {
