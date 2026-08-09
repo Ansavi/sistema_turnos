@@ -402,7 +402,17 @@ var Reglas_ = {
   /** Avisos que no impiden guardar, pero conviene revisar antes de publicar. */
   advertenciasDeMes: function (idArea, anio, mes) {
     var dias = Utilidades_.diasDelMes(anio, mes);
-    var desde = dias[0], hasta = dias[dias.length - 1];
+    return this.advertenciasDeRango(idArea, dias[0], dias[dias.length - 1]);
+  },
+
+  /** Avisos de un rango cualquiera: sirve igual a la vista mensual y a la semanal. */
+  advertenciasDeRango: function (idArea, desde, hasta) {
+    var dias = [];
+    var cursor = desde, guardaR = 0;
+    while (cursor <= hasta && guardaR++ < 400) {
+      dias.push(cursor);
+      cursor = Utilidades_.sumarDias(cursor, 1);
+    }
     var avisos = [];
 
     var porPersona = {};
