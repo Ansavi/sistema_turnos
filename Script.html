@@ -502,6 +502,7 @@ function marcarNav() {
 }
 
 function irA(vista) {
+  if (S.vigilante) { clearInterval(S.vigilante); S.vigilante = null; }
   S.vista = vista;
   S.seleccion = {}; S.pendientes = {};
   marcarNav();
@@ -545,23 +546,218 @@ function vistaCalendario() {
     '<select id="fAnio">' + anios.map(function (y) {
       return '<option value="' + y + '"' + (y === sel.anio ? ' selected' : '') + '>' + y + '</option>';
     }).join('') + '</select>' +
-    '<button class="btn" id="btnVer">Ver mes</button>';
+    '<div class="segmentado" role="group" aria-label="Tipo de vista">' +
+      ['mes', 'semana', 'dia'].map(function (v) {
+        return '<button class="seg' + (S.calVista === v ? ' activo' : '') + '" data-vista-cal="' + v + '">' +
+               (v === 'mes' ? 'Mes' : v === 'semana' ? 'Semana' : 'Día') + '</button>';
+      }).join('') + '</div>';
 
   ['fArea', 'fMes', 'fAnio'].forEach(function (id) { $(id).addEventListener('change', cargarTablero); });
-  $('btnVer').addEventListener('click', cargarTablero);
+  document.querySelectorAll('[data-vista-cal]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      S.calVista = b.dataset.vistaCal;
+      vistaCalendario();
+    });
+  });
   cargarTablero();
+}
+
+/** Primer día de la semana (lunes) que contiene la fecha indicada. */
+function lunesDe(iso) {
+  var p = iso.split('-');
+  var d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+  var desplazamiento = (d.getDay() + 6) % 7;   // lunes = 0
+  d.setDate(d.getDate() - desplazamiento);
+  var mm = ('0' + (d.getMonth() + 1)).slice(-2), dd = ('0' + d.getDate()).slice(-2);
+  return d.getFullYear() + '-' + mm + '-' + dd;
 }
 
 function cargarTablero() {
   S.calFiltro = { idArea: $('fArea').value, mes: Number($('fMes').value), anio: Number($('fAnio').value) };
   S.seleccion = {}; S.pendientes = {};
+  S.calVista = S.calVista || 'mes';
   $('contenido').innerHTML = '<div class="cargando">Cargando programación…</div>';
+
+  if (S.calVista === 'dia') { cargarDia(); return; }
+  if (S.calVista === 'semana') { cargarSemana(); return; }
+
   api('tablero', S.calFiltro).then(function (t) {
     S.tablero = t;
     pintarTablero();
+    vigilarCambios();
   }).catch(function (e) {
     if (!e.sinSesion) { $('contenido').innerHTML = '<div class="mensaje error">' + esc(e.message) + '</div>'; }
   });
+}
+
+/* ---------- Vista semanal ---------- */
+
+function cargarSemana() {
+  if (!S.calFecha || S.calFecha.substring(0, 7) !==
+      (S.calFiltro.anio + '-' + ('0' + S.calFiltro.mes).slice(-2))) {
+    S.calFecha = S.calFiltro.anio + '-' + ('0' + S.calFiltro.mes).slice(-2) + '-01';
+  }
+  var desde = lunesDe(S.calFecha);
+  api('tableroSemana', { idArea: S.calFiltro.idArea, desde: desde }).then(function (t) {
+    S.tablero = t;
+    pintarTablero();
+    // La navegación por semanas va sobre la rejilla, no en la barra superior:
+    // se usa mucho más que el cambio de mes.
+    var nav = document.createElement('div');
+    nav.className = 'nav-periodo';
+    nav.innerHTML =
+      '<button class="btn" id="semAnt">← Semana anterior</button>' +
+      '<strong>' + esc(t.desde) + ' al ' + esc(t.hasta) + '</strong>' +
+      '<button class="btn" id="semSig">Semana siguiente →</button>';
+    $('contenido').insertBefore(nav, $('contenido').firstChild);
+    $('semAnt').addEventListener('click', function () {
+      S.calFecha = restarDias(desde, 7); cargarSemana();
+    });
+    $('semSig').addEventListener('click', function () {
+      S.calFecha = sumarDiasCliente(desde, 7); cargarSemana();
+    });
+    vigilarCambios();
+  }).catch(function (e) {
+    if (!e.sinSesion) { $('contenido').innerHTML = '<div class="mensaje error">' + esc(e.message) + '</div>'; }
+  });
+}
+
+function sumarDiasCliente(iso, n) {
+  var p = iso.split('-');
+  var d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+  d.setDate(d.getDate() + n);
+  return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+}
+function restarDias(iso, n) { return sumarDiasCliente(iso, -n); }
+
+/* ---------- Vista diaria ---------- */
+
+function cargarDia() {
+  if (!S.calFecha) { S.calFecha = S.base.hoy; }
+  api('vistaDia', { idArea: S.calFiltro.idArea, fecha: S.calFecha }).then(function (d) {
+    pintarDia(d);
+    vigilarCambios();
+  }).catch(function (e) {
+    if (!e.sinSesion) { $('contenido').innerHTML = '<div class="mensaje error">' + esc(e.message) + '</div>'; }
+  });
+}
+
+function pintarDia(d) {
+  var html = '<div class="nav-periodo">' +
+    '<button class="btn" id="diaAnt">← Día anterior</button>' +
+    '<strong>' + esc(d.diaSemana) + ' ' + esc(d.fecha) + '</strong>' +
+    '<button class="btn" id="diaSig">Día siguiente →</button>' +
+    '<input type="date" id="diaFecha" value="' + esc(d.fecha) + '">' +
+    '</div>';
+
+  if (d.feriado) {
+    html += '<div class="' + (d.feriado.esLaborable ? 'aviso' : 'aviso-ok') + '"><span>' +
+      esc(d.feriado.descripcion) +
+      (d.feriado.esLaborable
+        ? ' · feriado LABORABLE' + (d.feriado.deTurno ? ': el juzgado está de turno' : '')
+        : ' · feriado no laborable') + '</span></div>';
+  } else if (d.deTurno) {
+    html += '<div class="aviso"><span class="mono">TURNO</span><span>El juzgado está de turno esta fecha.</span></div>';
+  }
+
+  html += '<div class="tarjetas">' +
+    tarjeta('Trabajan', d.trabajan.length, 'de ' + d.total + ' del juzgado') +
+    tarjeta('Descansan', d.descansan.length, 'día libre programado') +
+    tarjeta('Ausentes', d.ausentes.length, 'vacaciones, licencias u otros',
+            d.ausentes.length ? 'malo' : '') +
+    tarjeta('Sin programar', d.sinProgramar.length, d.sinProgramar.length ? 'requieren atención' : 'todo cubierto',
+            d.sinProgramar.length ? 'malo' : 'bueno') +
+    '</div>';
+
+  if (d.trabajan.length) {
+    html += '<h3 class="titulo-seccion">Personal de servicio</h3><div class="tarjeta"><table class="datos">' +
+      '<thead><tr><th>Persona</th><th>Turno</th><th>Horario</th><th>Función</th><th>Estado</th></tr></thead><tbody>' +
+      d.trabajan.map(function (t) {
+        return '<tr style="cursor:default"><td>' + esc(t.persona) + '</td>' +
+          '<td>' + esc(t.turno) + '</td>' +
+          '<td class="mono">' + esc(t.inicio) + ' – ' + esc(t.fin) +
+            (t.cruzaDia ? ' <span class="pastilla alerta">día siguiente</span>' : '') + '</td>' +
+          '<td>' + esc(t.funcion || '—') + '</td>' +
+          '<td>' + pastilla(t.estado) + '</td></tr>';
+      }).join('') + '</tbody></table></div>';
+  } else {
+    html += '<div class="vacio"><p>Nadie tiene turno de trabajo este día.</p></div>';
+  }
+
+  if (d.ausentes.length) {
+    html += '<h3 class="titulo-seccion">Ausencias</h3><div class="tarjeta"><table class="datos">' +
+      '<thead><tr><th>Persona</th><th>Motivo</th><th>Detalle</th></tr></thead><tbody>' +
+      d.ausentes.map(function (a) {
+        return '<tr style="cursor:default"><td>' + esc(a.persona) + '</td>' +
+          '<td>' + pastilla(String(a.tipo).replace(/_/g, ' ')) + '</td>' +
+          '<td>' + esc(a.motivo || '') + '</td></tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+
+  if (d.descansan.length) {
+    html += '<h3 class="titulo-seccion">Descansan</h3><p class="pista">' +
+      d.descansan.map(function (x) { return esc(x.persona); }).join(' · ') + '</p>';
+  }
+  if (d.sinProgramar.length) {
+    html += '<h3 class="titulo-seccion">Sin programar</h3><p class="pista">' +
+      d.sinProgramar.map(function (x) { return esc(x.persona); }).join(' · ') + '</p>';
+  }
+
+  $('contenido').innerHTML = html;
+  $('diaAnt').addEventListener('click', function () { S.calFecha = restarDias(d.fecha, 1); cargarDia(); });
+  $('diaSig').addEventListener('click', function () { S.calFecha = sumarDiasCliente(d.fecha, 1); cargarDia(); });
+  $('diaFecha').addEventListener('change', function () { S.calFecha = this.value; cargarDia(); });
+}
+
+/* ---------- Aviso de cambios de otras personas ---------- */
+
+/**
+ * Apps Script no puede avisar por su cuenta, así que se consulta un sello del
+ * periodo cada medio minuto. Si cambió, se avisa en lugar de recargar sin más:
+ * recargar solo borraría los cambios que la persona tenga a medio hacer.
+ */
+function vigilarCambios() {
+  if (S.vigilante) { clearInterval(S.vigilante); S.vigilante = null; }
+  if (!S.tablero && S.calVista !== 'dia') { return; }
+
+  var rango = rangoVisible();
+  if (!rango) { return; }
+
+  api('sello', { idArea: S.calFiltro.idArea, desde: rango.desde, hasta: rango.hasta })
+    .then(function (s) { S.selloActual = s.sello; })
+    .catch(function () {});
+
+  S.vigilante = setInterval(function () {
+    if (document.hidden) { return; }
+    api('sello', { idArea: S.calFiltro.idArea, desde: rango.desde, hasta: rango.hasta })
+      .then(function (s) {
+        if (!S.selloActual || s.sello === S.selloActual) { return; }
+        S.selloActual = s.sello;
+        clearInterval(S.vigilante);
+        avisarCambioExterno();
+      }).catch(function () {});
+  }, 30000);
+}
+
+function rangoVisible() {
+  if (S.calVista === 'dia') { return { desde: S.calFecha, hasta: S.calFecha }; }
+  if (S.tablero) { return { desde: S.tablero.desde, hasta: S.tablero.hasta }; }
+  return null;
+}
+
+function avisarCambioExterno() {
+  var pendientes = Object.keys(S.pendientes || {}).length;
+  var t = mensaje(pendientes
+    ? 'Otra persona modificó esta programación. Tienes ' + pendientes +
+      ' cambio(s) sin guardar: guárdalos o descártalos antes de actualizar.'
+    : 'Otra persona modificó esta programación.', 'proceso');
+
+  var boton = document.createElement('button');
+  boton.className = 'btn';
+  boton.style.cssText = 'padding:3px 9px;font-size:12px;margin-left:8px';
+  boton.textContent = 'Actualizar';
+  boton.addEventListener('click', function () { t.remove(); cargarTablero(); });
+  t.appendChild(boton);
 }
 
 function pintarTablero() {
@@ -790,7 +986,7 @@ function aplicarASeleccion() {
     if (!c) { return; }
     if (c.bloqueada && nombre === 'TRABAJO') { omitidas++; return; }
     var partes = k.split('|');
-    S.pendientes[k] = { idPersonal: partes[0], fecha: partes[1], id: c.id,
+    S.pendientes[k] = { idPersonal: partes[0], fecha: partes[1], id: c.id, version: c.version,
                         idTipoDia: idTipo,
                         idTurno: nombre === 'TRABAJO' ? idTurno : '',
                         idFuncion: nombre === 'TRABAJO' ? idFuncion : '' };
