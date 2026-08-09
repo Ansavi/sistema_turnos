@@ -462,6 +462,9 @@ function pintarNav() {
       if (puede('CALENDARIO', 'VER')) {
         extras = '<button class="nav-item" data-vista="calendario">Calendario del mes</button>' + extras;
       }
+      if (puede('CALENDARIO', 'CREAR')) {
+        extras += '<button class="nav-item" data-vista="programar">Programación masiva</button>';
+      }
       if (puede('COBERTURA', 'VER')) {
         extras += '<button class="nav-item" data-vista="cobertura">Cobertura del juzgado</button>';
       }
@@ -506,6 +509,7 @@ function irA(vista) {
   else if (vista.tipo === 'auditoria') { vistaAuditoria(); }
   else if (vista.tipo === 'permisos') { vistaPermisos(); }
   else if (vista.tipo === 'cobertura') { vistaCobertura(); }
+  else if (vista.tipo === 'programar') { vistaProgramar(); }
   else { vistaTabla(vista.tabla); }
 }
 
@@ -1278,6 +1282,345 @@ function guardarPermisos() {
   });
 }
 
+
+
+/* ============================================================
+   Vista: programación masiva
+   ============================================================ */
+function vistaProgramar() {
+  $('vistaGrupo').textContent = 'PROGRAMACIÓN';
+  $('vistaTitulo').textContent = 'Programación masiva';
+
+  var areas = S.base.areas;
+  if (!areas.length) {
+    $('acciones').innerHTML = '';
+    $('contenido').innerHTML = '<div class="vacio"><p>No hay juzgados activos.</p></div>';
+    return;
+  }
+
+  var sel = S.progFiltro || { idArea: areas[0].id, anio: S.base.anio, mes: S.base.mes };
+  S.progFiltro = sel;
+
+  $('acciones').innerHTML =
+    '<select id="gArea">' + areas.map(function (x) {
+      return '<option value="' + x.id + '"' + (x.id === sel.idArea ? ' selected' : '') + '>' + esc(x.nombre) + '</option>';
+    }).join('') + '</select>';
+  $('gArea').addEventListener('change', cargarProgramar);
+  cargarProgramar();
+}
+
+function cargarProgramar() {
+  S.progFiltro.idArea = $('gArea').value;
+  $('contenido').innerHTML = '<div class="cargando">Cargando opciones…</div>';
+  api('opcionesProgramacion', S.progFiltro).then(function (o) {
+    S.progOpc = o;
+    pintarProgramar();
+  }).catch(function (e) {
+    if (!e.sinSesion) { $('contenido').innerHTML = '<div class="mensaje error">' + esc(e.message) + '</div>'; }
+  });
+}
+
+function pintarProgramar() {
+  var o = S.progOpc;
+  if (!o.personal.length) {
+    $('contenido').innerHTML = '<div class="vacio"><p>Este juzgado no tiene personal asignado.</p>' +
+      '<button class="btn primario" onclick="irA({tipo:\'tabla\',tabla:\'PERSONAL_AREA\'})">Asignar personal</button></div>';
+    return;
+  }
+
+  var hoy = S.base.hoy;
+  var personas = o.personal.map(function (p) {
+    return '<label class="chk"><input type="checkbox" class="pers" value="' + p.id + '" checked> ' +
+           esc(p.nombre) + '</label>';
+  }).join('');
+
+  var tipos = o.tiposDia.map(function (t) {
+    return '<option value="' + t.id + '"' + (t.nombre === 'TRABAJO' ? ' selected' : '') + '>' +
+           esc(t.nombre) + '</option>';
+  }).join('');
+
+  var turnos = '<option value="">— sin turno —</option>' + o.turnos.map(function (t) {
+    return '<option value="' + t.id + '">' + esc(t.nombre) + ' (' + esc(t.inicio) + '–' + esc(t.fin) +
+           (t.cruza ? ' del día siguiente' : '') + ')</option>';
+  }).join('');
+
+  var funciones = '<option value="">— la habitual —</option>' + o.funciones.map(function (f) {
+    return '<option value="' + f.id + '">' + esc(f.nombre) + '</option>';
+  }).join('');
+
+  var dias = o.diasSemana.map(function (d) {
+    return '<label class="chk chk-dia"><input type="checkbox" class="dsem" value="' + d + '"> ' +
+           esc(d.substring(0, 3)) + '</label>';
+  }).join('');
+
+  var meses = function (sel) {
+    return MESES.map(function (m, i) {
+      return '<option value="' + (i + 1) + '"' + ((i + 1) === sel ? ' selected' : '') + '>' + m + '</option>';
+    }).join('');
+  };
+  var anios = function (sel) {
+    var out = '';
+    for (var a = S.base.anio - 1; a <= S.base.anio + 1; a++) {
+      out += '<option value="' + a + '"' + (a === sel ? ' selected' : '') + '>' + a + '</option>';
+    }
+    return out;
+  };
+
+  $('contenido').innerHTML =
+    '<div class="pestanas" role="tablist">' +
+      '<button class="pest activa" data-panel="pRango">Por rango de fechas</button>' +
+      '<button class="pest" data-panel="pPatron">Rotación cíclica</button>' +
+      '<button class="pest" data-panel="pCopiar">Copiar mes</button>' +
+      (o.puedeAnular ? '<button class="pest" data-panel="pLimpiar">Limpiar periodo</button>' : '') +
+    '</div>' +
+
+    '<div class="tarjeta panel-prog" id="paneles">' +
+      '<div class="campo"><label>Personal</label>' +
+        '<div class="chks" id="listaPersonal">' + personas + '</div>' +
+        '<div class="pista"><a href="#" onclick="marcarTodos(true);return false;">Todos</a> · ' +
+        '<a href="#" onclick="marcarTodos(false);return false;">Ninguno</a></div></div>' +
+
+      // --- Por rango
+      '<div class="panel-tab" id="pRango">' +
+        '<div class="fila-campos">' +
+          '<div class="campo"><label for="rDesde">Desde</label><input id="rDesde" type="date" value="' + hoy + '"></div>' +
+          '<div class="campo"><label for="rHasta">Hasta</label><input id="rHasta" type="date" value="' + hoy + '"></div>' +
+          '<div class="campo"><label for="rTipo">Tipo de día</label><select id="rTipo">' + tipos + '</select></div>' +
+          '<div class="campo"><label for="rTurno">Turno</label><select id="rTurno">' + turnos + '</select></div>' +
+          '<div class="campo"><label for="rFuncion">Función</label><select id="rFuncion">' + funciones + '</select></div>' +
+        '</div>' +
+        '<div class="campo"><label>Solo estos días de la semana <span class="pista-inline">(ninguno marcado = todos)</span></label>' +
+          '<div class="chks">' + dias + '</div></div>' +
+        '<label class="chk"><input type="checkbox" id="rSobre"> Sobrescribir lo ya programado</label>' +
+        '<div class="pie-panel"><button class="btn primario" id="btnRango">Programar</button></div>' +
+      '</div>' +
+
+      // --- Rotación
+      '<div class="panel-tab" id="pPatron" hidden>' +
+        '<p class="pista">Define un ciclo que se repite hasta cubrir el periodo. Ejemplo: dos días de ' +
+        'trabajo y uno de descanso.</p>' +
+        '<div class="fila-campos">' +
+          '<div class="campo"><label for="qDesde">Desde</label><input id="qDesde" type="date" value="' + hoy + '"></div>' +
+          '<div class="campo"><label for="qHasta">Hasta</label><input id="qHasta" type="date" value="' + hoy + '"></div>' +
+          '<div class="campo"><label for="qDesfase">Desfase entre personas</label>' +
+            '<select id="qDesfase"><option value="1">1 paso (recomendado)</option>' +
+            '<option value="0">Sin desfase</option><option value="2">2 pasos</option></select></div>' +
+        '</div>' +
+        '<div id="pasos"></div>' +
+        '<button class="btn" id="btnPaso">Añadir paso al ciclo</button>' +
+        '<div class="pie-panel"><button class="btn primario" id="btnPatron">Aplicar rotación</button></div>' +
+      '</div>' +
+
+      // --- Copiar mes
+      '<div class="panel-tab" id="pCopiar" hidden>' +
+        '<p class="pista">Traslada la programación día por día. Las ausencias y feriados del mes ' +
+        'de destino mandan sobre lo copiado.</p>' +
+        '<div class="fila-campos">' +
+          '<div class="campo"><label for="cMesO">Copiar desde</label><select id="cMesO">' + meses(S.base.mes) + '</select></div>' +
+          '<div class="campo"><label for="cAnioO">&nbsp;</label><select id="cAnioO">' + anios(S.base.anio) + '</select></div>' +
+          '<div class="campo"><label for="cMesD">Hacia</label><select id="cMesD">' + meses(S.base.mes === 12 ? 1 : S.base.mes + 1) + '</select></div>' +
+          '<div class="campo"><label for="cAnioD">&nbsp;</label><select id="cAnioD">' + anios(S.base.anio) + '</select></div>' +
+        '</div>' +
+        '<div class="pie-panel"><button class="btn primario" id="btnCopiar">Copiar</button></div>' +
+      '</div>' +
+
+      // --- Limpiar
+      (o.puedeAnular ?
+      '<div class="panel-tab" id="pLimpiar" hidden>' +
+        '<p class="pista">Anula la programación del periodo. No se borra nada: los registros quedan ' +
+        'como ANULADO y el cambio consta en la auditoría.</p>' +
+        '<div class="fila-campos">' +
+          '<div class="campo"><label for="lDesde">Desde</label><input id="lDesde" type="date" value="' + hoy + '"></div>' +
+          '<div class="campo"><label for="lHasta">Hasta</label><input id="lHasta" type="date" value="' + hoy + '"></div>' +
+        '</div>' +
+        '<label class="chk"><input type="checkbox" id="lSoloBorrador" checked> Respetar lo ya publicado</label>' +
+        '<div class="pie-panel"><button class="btn peligro-solido" id="btnLimpiar">Anular periodo</button></div>' +
+      '</div>' : '') +
+    '</div>' +
+    '<div id="resultadoProg"></div>';
+
+  document.querySelectorAll('.pest').forEach(function (b) {
+    b.addEventListener('click', function () {
+      document.querySelectorAll('.pest').forEach(function (x) { x.classList.remove('activa'); });
+      b.classList.add('activa');
+      document.querySelectorAll('.panel-tab').forEach(function (x) { x.hidden = true; });
+      $(b.dataset.panel).hidden = false;
+    });
+  });
+
+  agregarPaso();
+  $('btnPaso').addEventListener('click', agregarPaso);
+  $('btnRango').addEventListener('click', ejecutarRango);
+  $('btnPatron').addEventListener('click', ejecutarPatron);
+  $('btnCopiar').addEventListener('click', ejecutarCopiar);
+  if ($('btnLimpiar')) { $('btnLimpiar').addEventListener('click', ejecutarLimpiar); }
+}
+
+function marcarTodos(valor) {
+  document.querySelectorAll('.pers').forEach(function (c) { c.checked = valor; });
+}
+
+function personalElegido() {
+  var ids = [];
+  document.querySelectorAll('.pers:checked').forEach(function (c) { ids.push(c.value); });
+  return ids;
+}
+
+function agregarPaso() {
+  var o = S.progOpc;
+  var n = document.querySelectorAll('.paso').length + 1;
+  var div = document.createElement('div');
+  div.className = 'paso fila-campos';
+  div.innerHTML =
+    '<div class="campo" style="max-width:60px"><label>Día</label>' +
+      '<div class="paso-num">' + n + '</div></div>' +
+    '<div class="campo"><label>Tipo</label><select class="pTipo">' +
+      o.tiposDia.map(function (t) {
+        return '<option value="' + t.id + '"' + (t.nombre === 'TRABAJO' ? ' selected' : '') + '>' +
+               esc(t.nombre) + '</option>';
+      }).join('') + '</select></div>' +
+    '<div class="campo"><label>Turno</label><select class="pTur"><option value="">— sin turno —</option>' +
+      o.turnos.map(function (t) {
+        return '<option value="' + t.id + '">' + esc(t.nombre) + '</option>';
+      }).join('') + '</select></div>' +
+    '<div class="campo"><label>Función</label><select class="pFun"><option value="">— la habitual —</option>' +
+      o.funciones.map(function (f) {
+        return '<option value="' + f.id + '">' + esc(f.nombre) + '</option>';
+      }).join('') + '</select></div>' +
+    '<button class="btn quitar-paso" title="Quitar este paso">✕</button>';
+  $('pasos').appendChild(div);
+  div.querySelector('.quitar-paso').addEventListener('click', function () {
+    div.remove();
+    document.querySelectorAll('.paso-num').forEach(function (x, i) { x.textContent = i + 1; });
+  });
+}
+
+function mostrarResultado(r) {
+  var html = '<div class="mensaje ok" style="margin-top:16px">' + esc(r.mensaje) + '</div>';
+
+  if (r.omitidas && r.omitidas.length) {
+    html += '<h3 class="titulo-seccion">Días omitidos</h3><div class="tarjeta"><table class="datos">' +
+      '<thead><tr><th>Persona</th><th>Fecha</th><th>Motivo</th></tr></thead><tbody>' +
+      r.omitidas.slice(0, 60).map(function (o) {
+        return '<tr style="cursor:default"><td>' + esc(o.persona) + '</td>' +
+               '<td class="mono">' + esc(o.fecha) + '</td><td>' + esc(o.motivo) + '</td></tr>';
+      }).join('') + '</tbody></table></div>' +
+      (r.omitidas.length > 60 ? '<p class="pista">y ' + (r.omitidas.length - 60) + ' más</p>' : '');
+  }
+
+  if (r.fallos && r.fallos.length) {
+    html += '<h3 class="titulo-seccion">Rechazados por las reglas</h3><div class="tarjeta"><table class="datos">' +
+      '<thead><tr><th>Fecha</th><th>Motivo</th></tr></thead><tbody>' +
+      r.fallos.slice(0, 40).map(function (f) {
+        return '<tr style="cursor:default"><td class="mono">' + esc(f.fecha) + '</td>' +
+               '<td>' + esc(f.error) + '</td></tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+
+  html += '<p class="pista" style="margin-top:12px">' +
+    '<a href="#" onclick="irA({tipo:\'calendario\'});return false;">Ver el calendario</a></p>';
+
+  $('resultadoProg').innerHTML = html;
+  $('resultadoProg').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function ejecutarProg(accion, datos, boton) {
+  var b = $(boton);
+  var etiqueta = b.textContent;
+  b.disabled = true;
+  b.textContent = 'Procesando…';
+  var cerrar = mensajeProgreso('Aplicando la programación…');
+
+  api(accion, datos).then(function (r) {
+    cerrar();
+    b.disabled = false;
+    b.textContent = etiqueta;
+    mostrarResultado(r);
+    mensaje(r.mensaje);
+  }).catch(function (e) {
+    cerrar();
+    b.disabled = false;
+    b.textContent = etiqueta;
+    if (!e.sinSesion) { mensaje(e.message, 'error'); }
+  });
+}
+
+function ejecutarRango() {
+  var ids = personalElegido();
+  if (!ids.length) { mensaje('Selecciona al menos una persona.', 'error'); return; }
+  var dias = [];
+  document.querySelectorAll('.dsem:checked').forEach(function (c) { dias.push(c.value); });
+
+  ejecutarProg('programarRango', {
+    idArea: S.progFiltro.idArea, idsPersonal: ids,
+    desde: $('rDesde').value, hasta: $('rHasta').value,
+    idTipoDia: $('rTipo').value, idTurno: $('rTurno').value, idFuncion: $('rFuncion').value,
+    filtroDias: dias, sobrescribir: $('rSobre').checked
+  }, 'btnRango');
+}
+
+function ejecutarPatron() {
+  var ids = personalElegido();
+  if (!ids.length) { mensaje('Selecciona al menos una persona.', 'error'); return; }
+
+  var patron = [];
+  document.querySelectorAll('.paso').forEach(function (d) {
+    patron.push({
+      idTipoDia: d.querySelector('.pTipo').value,
+      idTurno: d.querySelector('.pTur').value,
+      idFuncion: d.querySelector('.pFun').value
+    });
+  });
+  if (!patron.length) { mensaje('Añade al menos un paso al ciclo.', 'error'); return; }
+
+  ejecutarProg('programarPatron', {
+    idArea: S.progFiltro.idArea, idsPersonal: ids,
+    desde: $('qDesde').value, hasta: $('qHasta').value,
+    desfase: Number($('qDesfase').value), patron: patron
+  }, 'btnPatron');
+}
+
+function ejecutarCopiar() {
+  confirmar({
+    titulo: 'Copiar la programación',
+    texto: 'Se trasladará la programación de ' + MESES[Number($('cMesO').value) - 1] + ' ' +
+           $('cAnioO').value + ' a ' + MESES[Number($('cMesD').value) - 1] + ' ' + $('cAnioD').value + '.',
+    detalle: 'Los días que ya estén programados en el mes de destino no se tocan.',
+    aceptar: 'Copiar'
+  }, function () {
+    ejecutarProg('copiarMes', {
+      idArea: S.progFiltro.idArea, idsPersonal: personalElegido(),
+      anioOrigen: Number($('cAnioO').value), mesOrigen: Number($('cMesO').value),
+      anioDestino: Number($('cAnioD').value), mesDestino: Number($('cMesD').value)
+    }, 'btnCopiar');
+  });
+}
+
+function ejecutarLimpiar() {
+  var ids = personalElegido();
+  confirmar({
+    titulo: 'Anular el periodo',
+    texto: 'Se anulará la programación del ' + $('lDesde').value + ' al ' + $('lHasta').value +
+           ' para ' + (ids.length ? ids.length + ' persona(s)' : 'todo el personal') + '.',
+    detalle: 'No se borra nada: los registros quedan como ANULADO y consta en la auditoría.',
+    aceptar: 'Anular', peligro: true
+  }, function () {
+    var b = $('btnLimpiar');
+    b.disabled = true;
+    api('limpiarRango', {
+      idArea: S.progFiltro.idArea, idsPersonal: ids,
+      desde: $('lDesde').value, hasta: $('lHasta').value,
+      soloBorrador: $('lSoloBorrador').checked
+    }).then(function (r) {
+      b.disabled = false;
+      mensaje(r.anulados + ' día(s) anulados.');
+      $('resultadoProg').innerHTML = '';
+    }).catch(function (e) {
+      b.disabled = false;
+      if (!e.sinSesion) { mensaje(e.message, 'error'); }
+    });
+  });
+}
 
 /* ============================================================
    Vista: cobertura del juzgado
