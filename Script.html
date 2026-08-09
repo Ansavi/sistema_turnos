@@ -233,7 +233,7 @@ function entrarAlPanel(silencioso) {
     $('btnMiClave').onclick = abrirCambioClave;
     $('btnSalir').onclick = salir;
     pintarNav();
-    irA({ tipo: 'calendario' });
+    irA({ tipo: 'inicio' });
   }).catch(function (err) {
     if (err.sinSesion) { return; }              // mostrarAcceso ya se encargó
     if (silencioso && S.modo !== 'GOOGLE') { mostrarAcceso(''); return; }
@@ -453,7 +453,7 @@ function pintarNav() {
     if (grupos[t.grupo]) { grupos[t.grupo].push(t); }
   });
 
-  var html = '';
+  var html = '<div class="nav-grupo"><button class="nav-item" data-vista="inicio">Inicio</button></div>';
   ORDEN_GRUPOS.forEach(function (g) {
     var items = grupos[g] || [];
     var extras = '';
@@ -506,12 +506,151 @@ function irA(vista) {
   S.vista = vista;
   S.seleccion = {}; S.pendientes = {};
   marcarNav();
-  if (vista.tipo === 'calendario') { vistaCalendario(); }
+  if (vista.tipo === 'inicio') { vistaInicio(); }
+  else if (vista.tipo === 'calendario') { vistaCalendario(); }
   else if (vista.tipo === 'auditoria') { vistaAuditoria(); }
   else if (vista.tipo === 'permisos') { vistaPermisos(); }
   else if (vista.tipo === 'cobertura') { vistaCobertura(); }
   else if (vista.tipo === 'programar') { vistaProgramar(); }
   else { vistaTabla(vista.tabla); }
+}
+
+
+/* ============================================================
+   Vista: inicio (dashboard)
+   ============================================================ */
+function vistaInicio() {
+  $('vistaGrupo').textContent = 'PANEL';
+  $('vistaTitulo').textContent = 'Inicio';
+  $('acciones').innerHTML = '<button class="btn" id="btnRefrescar">Actualizar</button>';
+  $('contenido').innerHTML = '<div class="cargando">Calculando indicadores…</div>';
+  $('btnRefrescar').addEventListener('click', vistaInicio);
+
+  api('panel', {}).then(pintarInicio).catch(function (e) {
+    if (!e.sinSesion) { $('contenido').innerHTML = '<div class="mensaje error">' + esc(e.message) + '</div>'; }
+  });
+}
+
+function pintarInicio(d) {
+  var i = d.indicadores;
+  var html = '<p class="pista" style="margin:0 0 14px">' +
+    esc(d.diaSemana.charAt(0) + d.diaSemana.substring(1).toLowerCase()) + ' ' + esc(d.fecha) + '</p>';
+
+  // --- Alertas primero: es lo accionable
+  if (d.alertas.length) {
+    html += '<h3 class="titulo-seccion">Requieren atención</h3><div class="alertas">' +
+      d.alertas.slice(0, 12).map(function (a) {
+        return '<div class="alerta n-' + a.nivel.toLowerCase() + '">' +
+          '<span class="alerta-tipo">' + esc(a.tipo) + '</span>' +
+          '<span class="alerta-txt">' + esc(a.texto) + '</span>' +
+          '<button class="btn alerta-btn" data-ir="' + a.accion + '">Ir</button></div>';
+      }).join('') + '</div>' +
+      (d.alertas.length > 12 ? '<p class="pista">y ' + (d.alertas.length - 12) + ' más</p>' : '');
+  } else {
+    html += '<div class="aviso-ok"><span>No hay alertas: la programación está al día.</span></div>';
+  }
+
+  // --- Indicadores
+  html += '<h3 class="titulo-seccion">Hoy</h3><div class="tarjetas">' +
+    tarjeta('De servicio', i.programadosHoy, 'personas con turno hoy',
+            i.programadosHoy ? '' : 'malo') +
+    tarjeta('Ausentes', i.incidenciasHoy, 'por cualquier motivo',
+            i.incidenciasHoy ? 'malo' : 'bueno') +
+    tarjeta('Personal activo', i.personalActivo,
+            i.personalInactivo ? i.personalInactivo + ' inactivo(s)' : 'toda la plantilla') +
+    tarjeta('Juzgados', i.juzgadosActivos, 'activos') +
+    '</div>';
+
+  if (d.permisos.incidencias) {
+    html += '<div class="tarjetas">' +
+      tarjeta('Vacaciones', i.vacacionesHoy, 'personas hoy') +
+      tarjeta('Descanso médico', i.descansoMedicoHoy, 'personas hoy',
+              i.descansoMedicoHoy ? 'malo' : '') +
+      tarjeta('Compensatorios', i.compensatoriosPendientes, 'pendientes de usar') +
+      tarjeta('Cumpleaños', i.cumpleanosMes, 'este mes') +
+      '</div>';
+  }
+
+  // --- Turnos de hoy
+  html += '<h3 class="titulo-seccion">Turnos de hoy</h3>';
+  if (d.turnosHoy.length) {
+    html += '<div class="tarjeta"><table class="datos"><thead><tr>' +
+      '<th>Turno</th><th>Horario</th><th>Personal</th></tr></thead><tbody>' +
+      d.turnosHoy.map(function (t) {
+        return '<tr style="cursor:default"><td><strong>' + esc(t.turno) + '</strong></td>' +
+          '<td class="mono">' + esc(t.inicio) + ' – ' + esc(t.fin) +
+            (t.cruza ? ' <span class="pastilla alerta">día siguiente</span>' : '') + '</td>' +
+          '<td>' + t.personas.map(function (p) {
+            return esc(p.persona) + ' <span class="pastilla no">' + esc(p.juzgado) +
+                   (p.funcion ? ' · ' + esc(p.funcion) : '') + '</span>';
+          }).join('<br>') + '</td></tr>';
+      }).join('') + '</tbody></table></div>';
+  } else {
+    html += '<p class="pista">Nadie tiene turno de trabajo hoy.</p>';
+  }
+
+  // --- Ausencias de hoy
+  if (d.ausentesHoy.length) {
+    html += '<h3 class="titulo-seccion">Ausencias de hoy</h3><div class="tarjeta"><table class="datos">' +
+      '<thead><tr><th>Persona</th><th>Motivo</th><th>Detalle</th></tr></thead><tbody>' +
+      d.ausentesHoy.map(function (a) {
+        return '<tr style="cursor:default"><td>' + esc(a.persona) + '</td>' +
+          '<td>' + pastilla(String(a.tipo).replace(/_/g, ' ')) + '</td>' +
+          '<td>' + esc(a.detalle || '') + '</td></tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+
+  // --- Resumen por juzgado
+  html += '<h3 class="titulo-seccion">Resumen por juzgado</h3><div class="tarjeta"><table class="datos">' +
+    '<thead><tr><th>Juzgado</th><th>Plantilla</th><th>De servicio hoy</th>' +
+    '<th>Días programados del mes</th><th>Cobertura</th></tr></thead><tbody>' +
+    d.resumenAreas.map(function (a) {
+      return '<tr style="cursor:default"><td><strong>' + esc(a.juzgado) + '</strong>' +
+        (a.deTurno ? ' <span class="pastilla alerta">de turno</span>' : '') + '</td>' +
+        '<td class="mono">' + a.plantilla + '</td>' +
+        '<td class="mono">' + a.trabajanHoy + '</td>' +
+        '<td class="mono">' + a.diasProgramadosMes + '</td>' +
+        '<td>' + (a.diasEnRiesgo
+          ? '<span class="pastilla mal">' + a.diasEnRiesgo + ' día(s) en riesgo</span>'
+          : '<span class="pastilla ok">cubierta</span>') + '</td></tr>';
+    }).join('') + '</tbody></table></div>';
+
+  // --- Compensatorios por vencer
+  if (d.compensatoriosPorVencer.length) {
+    html += '<h3 class="titulo-seccion">Compensatorios por vencer</h3><div class="tarjeta"><table class="datos">' +
+      '<thead><tr><th>Persona</th><th>Vence</th><th>Restan</th><th>Día elegido</th></tr></thead><tbody>' +
+      d.compensatoriosPorVencer.map(function (c) {
+        return '<tr style="cursor:default"><td>' + esc(c.persona) + '</td>' +
+          '<td class="mono">' + esc(c.vence) + '</td>' +
+          '<td><span class="pastilla ' + (c.diasRestantes <= 3 ? 'mal' : 'alerta') + '">' +
+            (c.diasRestantes < 0 ? 'vencido' : c.diasRestantes + ' día(s)') + '</span></td>' +
+          '<td class="mono">' + esc(c.fecha || '—') + '</td></tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+
+  // --- Cumpleaños del mes
+  if (d.cumples.length) {
+    html += '<h3 class="titulo-seccion">Cumpleaños del mes</h3><p class="pista">' +
+      d.cumples.map(function (c) {
+        return (c.esHoy ? '<strong>' : '') + esc(c.persona) + ' (' + c.dia + ')' +
+               (c.esHoy ? ' — hoy</strong>' : '');
+      }).join(' · ') + '</p>';
+  }
+
+  $('contenido').innerHTML = html;
+
+  document.querySelectorAll('[data-ir]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var destinos = {
+        cobertura: { tipo: 'cobertura' },
+        programar: { tipo: 'programar' },
+        incidencias: { tipo: 'tabla', tabla: 'COMPENSATORIO' },
+        maestros: { tipo: 'tabla', tabla: 'AREA_TURNO' },
+        personal: { tipo: 'tabla', tabla: 'PERSONAL_AREA' }
+      };
+      irA(destinos[b.dataset.ir] || { tipo: 'calendario' });
+    });
+  });
 }
 
 /* ============================================================
