@@ -190,4 +190,41 @@ table.matriz td.na{color:#C3CBD5;font-family:var(--mono);font-size:11px}
 
 /* Celda con turno y función: dos líneas en la misma altura. */
 .celda .chip{white-space:pre-line;line-height:1.05;font-size:9px;padding:1px 0}
+
+/* ---------- Programación masiva ---------- */
+.pestanas{display:flex;gap:2px;margin-bottom:-1px;flex-wrap:wrap}
+.pest{
+  border:1px solid var(--linea);border-bottom-color:transparent;background:#F4F6F9;
+  padding:8px 14px;border-radius:var(--r) var(--r) 0 0;cursor:pointer;
+  font-size:13px;font-weight:500;color:var(--texto-tenue);
+}
+.pest:hover{color:var(--texto);background:#EEF1F5}
+.pest.activa{background:var(--superficie);color:var(--tinta);border-bottom-color:var(--superficie)}
+.panel-prog{padding:18px;border-radius:0 var(--r) var(--r) var(--r)}
+
+.fila-campos{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
+.fila-campos .campo{flex:1 1 150px;margin-bottom:12px}
+.fila-campos .campo select,.fila-campos .campo input{width:100%}
+
+.chks{display:flex;gap:6px 16px;flex-wrap:wrap;padding:8px 0}
+.chk{display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;font-weight:400}
+.chk input{width:15px;height:15px;accent-color:var(--acero);cursor:pointer}
+.chk-dia{
+  border:1px solid var(--linea);border-radius:var(--r);padding:4px 9px;
+  font-family:var(--mono);font-size:11px;
+}
+.pista-inline{font-weight:400;color:var(--texto-tenue);font-size:11px}
+
+.paso{
+  border-left:3px solid var(--acero);padding-left:12px;margin-bottom:6px;
+  background:#F7F9FB;border-radius:0 var(--r) var(--r) 0;padding-top:8px;
+}
+.paso-num{
+  font-family:var(--mono);font-size:18px;font-weight:600;color:var(--acero);
+  padding:5px 0;
+}
+.quitar-paso{padding:6px 10px;margin-bottom:12px;color:var(--rojo);border-color:#E4C4C2}
+
+.pie-panel{margin-top:14px;padding-top:14px;border-top:1px solid var(--linea-suave);display:flex;gap:8px}
+.panel-prog a{color:var(--acero)}
 </style>
