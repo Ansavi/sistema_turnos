@@ -227,6 +227,37 @@ var ENRUTADOR_ = {
     return Calendario_.publicarMes(ctx, d.idArea, Number(d.anio), Number(d.mes));
   },
 
+  /* ---------- Reportes ---------- */
+
+  /** Catálogo de reportes que el usuario puede ver, y los datos de los filtros. */
+  reportesDisponibles: function (ctx) {
+    Permisos_.exigir(ctx, 'REPORTES', 'VER');
+    return {
+      reportes: Reportes_.disponibles(ctx),
+      areas: Db_.leer('AREA').filter(function (a) {
+        return String(a.ESTADO_AREA).toUpperCase() === 'ACTIVO';
+      }).map(function (a) { return { id: a.IDAREA, nombre: a.AREA }; }),
+      personal: Db_.leer('PERSONAL').map(function (p) {
+        return { id: p.IDPERSONAL, nombre: p.APELLIDOS + ', ' + p.NOMBRES };
+      }).sort(function (a, b) { return a.nombre.localeCompare(b.nombre); }),
+      turnos: Db_.leer('TURNO').map(function (t) {
+        return { id: t.IDTURNO, nombre: t.NOMBRE_TURNO };
+      }),
+      tiposDia: Db_.leer('TIPO_DIA').map(function (t) {
+        return { id: t.IDTIPO_DIA, nombre: t.TIPO_DIA };
+      }),
+      hoy: Utilidades_.hoyISO()
+    };
+  },
+
+  generarReporte: function (ctx, d) {
+    return Reportes_.generar(ctx, d.clave, d.filtros || {});
+  },
+
+  exportarReporte: function (ctx, d) {
+    return Reportes_.csv(ctx, d.clave, d.filtros || {});
+  },
+
   /** Dashboard: indicadores, alertas y resúmenes del día. */
   panel: function (ctx, d) {
     return Panel_.resumen(ctx, d || {});
