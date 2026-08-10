@@ -43,7 +43,14 @@ function api(accion, datos) {
     google.script.run
       .withSuccessHandler(function (r) {
         if (r && r.ok) { resolver(r.datos); return; }
-        var err = new Error((r && r.error) || 'Error desconocido');
+        var texto = (r && r.error) ? r.error
+          : 'El servidor rechazó la operación sin indicar el motivo' +
+            (r && r.accion ? ' (acción: ' + r.accion + ')' : '') + '.';
+        if (r && r.incidente) {
+          texto += '\n\nCódigo del incidente: ' + r.incidente +
+                   '\nBúscalo en el editor de Apps Script, en Ejecuciones, para ver el detalle.';
+        }
+        var err = new Error(texto);
         if (r && r.sinSesion) {
           err.sinSesion = true;
           guardarToken(null);
@@ -1297,7 +1304,11 @@ function abrirFormulario(tabla, registro) {
 
   var soloVer = !def.editable && !esNuevo;
 
-  var campos = def.campos.filter(function (f) { return !f.pk; }).map(function (f) {
+  // Los campos de auditoría de fila los rellena el sistema: mostrarlos vacíos y
+  // editables invita a tocarlos y ensucia el formulario.
+  var campos = def.campos.filter(function (f) {
+    return !f.pk && !f.auditoria;
+  }).map(function (f) {
     var valor = registro ? registro[f.c] : '';
     var id = 'f_' + f.c;
     var etiqueta = '<label class="' + (f.req ? 'req' : '') + '" for="' + id + '">' +
