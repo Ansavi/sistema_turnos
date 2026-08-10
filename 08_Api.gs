@@ -37,6 +37,104 @@ function incluir(archivo) {
 /** Acciones que no requieren sesión iniciada. */
 var PUBLICAS_ = ['modoAcceso', 'iniciarSesion'];
 
+/**
+ * Deja la respuesta en tipos que el navegador pueda recibir.
+ *
+ * El puente entre Apps Script y la página solo transporta texto, números, booleanos,
+ * fechas válidas, listas y objetos simples. Basta una celda con una fecha inválida
+ * —cosa que ocurre cuando Sheets interpreta como fecha algo que no lo es— para que
+ * el envío falle entero y la página reciba una respuesta vacía, sin ningún mensaje
+ * que explique qué pasó.
+ *
+ * Sanear aquí, en un solo punto, evita que cualquier dato torcido de la hoja tumbe
+ * una pantalla completa.
+ */
+function sanear_(valor, profundidad) {
+  if (valor === null || valor === undefined) { return ''; }
+
+  var tipo = typeof valor;
+  if (tipo === 'string' || tipo === 'boolean') { return valor; }
+  if (tipo === 'number') { return isFinite(valor) ? valor : ''; }
+  if (tipo === 'function') { return ''; }
+
+  if (Object.prototype.toString.call(valor) === '[object Date]') {
+    if (isNaN(valor.getTime())) { return ''; }
+    return Utilities.formatDate(valor, CONFIG_().TZ, 'yyyy-MM-dd HH:mm:ss');
+  }
+
+  // Tope de profundidad: una estructura circular colgaría la función.
+  if (profundidad > 8) { return String(valor); }
+
+  if (Object.prototype.toString.call(valor) === '[object Array]') {
+    return valor.map(function (v) { return sanear_(v, profundidad + 1); });
+  }
+
+  if (tipo === 'object') {
+    var salida = {};
+    Object.keys(valor).forEach(function (k) {
+      salida[k] = sanear_(valor[k], profundidad + 1);
+    });
+    return salida;
+  }
+
+  return String(valor);
+}
+
+/**
+ * Revisa cada hoja en busca de celdas que impedirían enviar los datos al panel.
+ * DÓNDE SE EJECUTA: Editor Apps Script → elegir `diagnosticarDatos` → Ejecutar.
+ */
+function diagnosticarDatos() {
+  var lineas = [];
+  var problemas = 0;
+
+  ORDEN_HOJAS_().forEach(function (clave) {
+    var def = ESQUEMA_()[clave];
+    var hoja = SS_().getSheetByName(def.hoja);
+    if (!hoja || hoja.getLastRow() < 2) { return; }
+
+    var ancho = Math.max(hoja.getLastColumn(), 1);
+    var cabeceras = hoja.getRange(1, 1, 1, ancho).getValues()[0]
+                        .map(function (v) { return String(v).trim(); });
+    var datos = hoja.getRange(2, 1, hoja.getLastRow() - 1, ancho).getValues();
+
+    datos.forEach(function (fila, i) {
+      fila.forEach(function (v, j) {
+        var malo = '';
+        if (Object.prototype.toString.call(v) === '[object Date]' && isNaN(v.getTime())) {
+          malo = 'fecha inválida';
+        } else if (typeof v === 'number' && !isFinite(v)) {
+          malo = 'número no válido';
+        } else if (typeof v === 'string' && v.indexOf('#') === 0 && v.indexOf('!') > 0) {
+          malo = 'error de fórmula (' + v + ')';
+        }
+        if (malo) {
+          problemas++;
+          lineas.push('  ' + def.hoja + ' · fila ' + (i + 2) + ' · columna ' +
+                      (cabeceras[j] || j + 1) + ' → ' + malo);
+        }
+      });
+    });
+  });
+
+  var texto = 'DIAGNÓSTICO DE DATOS  ' + Utilidades_.ahora() + '\n' + '='.repeat(52) + '\n' +
+    (problemas
+      ? lineas.join('\n') + '\n' + '='.repeat(52) + '\n' + problemas +
+        ' celda(s) con contenido que impide enviar los datos al panel.\n' +
+        'Bórralas o corrígelas desde la hoja. El sistema ya las neutraliza al enviar, ' +
+        'pero conviene dejarlas limpias.'
+      : '  Ninguna celda problemática.\n' + '='.repeat(52));
+
+  console.log(texto);
+  try {
+    SpreadsheetApp.getUi().alert('Diagnóstico de datos',
+      problemas ? problemas + ' celda(s) con problemas. El detalle está en el registro.'
+                : 'Todas las celdas están correctas.',
+      SpreadsheetApp.getUi().ButtonSet.OK);
+  } catch (ignore) {}
+  return texto;
+}
+
 /** Respuesta uniforme: { ok, datos } o { ok:false, error, sinSesion? }. */
 function api(accion, datos, token) {
   datos = datos || {};
@@ -68,7 +166,7 @@ function api(accion, datos, token) {
   try {
     var manejador = ENRUTADOR_[accion];
     if (!manejador) { throw new Error('Acción no reconocida: ' + accion); }
-    return { ok: true, datos: manejador(ctx, datos) };
+    return { ok: true, datos: sanear_(manejador(ctx, datos), 0) };
   } catch (err) {
     /**
      * Un error sin mensaje deja a la persona sin nada que hacer y a quien da
