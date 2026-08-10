@@ -202,6 +202,7 @@ function onOpen() {
     .addItem('Migrar a la versión 2', 'migrarAVersion2')
     .addItem('Verificar sistema', 'verificarSistema')
     .addItem('Ejecutar casos de prueba', 'ejecutarPruebas')
+    .addItem('Diagnosticar datos', 'diagnosticarDatos')
     .addSeparator()
     .addItem('Generar día de cumpleaños del año', 'generarCumpleaniosDelAnio')
     .addSeparator()
