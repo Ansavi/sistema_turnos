@@ -469,6 +469,9 @@ function pintarNav() {
         extras += '<button class="nav-item" data-vista="cobertura">Cobertura del juzgado</button>';
       }
     }
+    if (g === 'Programación' && puede('REPORTES', 'VER')) {
+      extras += '<button class="nav-item" data-vista="reportes">Reportes</button>';
+    }
     if (g === 'Seguridad') {
       if (puede('PERMISOS', 'VER')) { extras += '<button class="nav-item" data-vista="permisos">Permisos</button>'; }
       if (puede('AUDITORIA', 'VER')) { extras += '<button class="nav-item" data-vista="auditoria">Auditoría</button>'; }
@@ -512,6 +515,7 @@ function irA(vista) {
   else if (vista.tipo === 'permisos') { vistaPermisos(); }
   else if (vista.tipo === 'cobertura') { vistaCobertura(); }
   else if (vista.tipo === 'programar') { vistaProgramar(); }
+  else if (vista.tipo === 'reportes') { vistaReportes(); }
   else { vistaTabla(vista.tabla); }
 }
 
@@ -1954,6 +1958,213 @@ function ejecutarLimpiar() {
       b.disabled = false;
       if (!e.sinSesion) { mensaje(e.message, 'error'); }
     });
+  });
+}
+
+
+/* ============================================================
+   Vista: reportes
+   ============================================================ */
+function vistaReportes() {
+  $('vistaGrupo').textContent = 'PROGRAMACIÓN';
+  $('vistaTitulo').textContent = 'Reportes';
+  $('acciones').innerHTML = '';
+  $('contenido').innerHTML = '<div class="cargando">Cargando reportes…</div>';
+
+  api('reportesDisponibles', {}).then(function (o) {
+    S.repOpc = o;
+    S.repClave = S.repClave || (o.reportes[0] || {}).clave;
+    pintarReportes();
+  }).catch(function (e) {
+    if (!e.sinSesion) { $('contenido').innerHTML = '<div class="mensaje error">' + esc(e.message) + '</div>'; }
+  });
+}
+
+function pintarReportes() {
+  var o = S.repOpc;
+  if (!o.reportes.length) {
+    $('contenido').innerHTML = '<div class="vacio"><p>Tu nivel no tiene reportes disponibles.</p></div>';
+    return;
+  }
+
+  var def = o.reportes.filter(function (r) { return r.clave === S.repClave; })[0] || o.reportes[0];
+  S.repClave = def.clave;
+  var tiene = function (f) { return def.filtros.indexOf(f) >= 0; };
+
+  var opciones = function (lista, vacio) {
+    return '<option value="">' + vacio + '</option>' + lista.map(function (x) {
+      return '<option value="' + x.id + '">' + esc(x.nombre) + '</option>';
+    }).join('');
+  };
+
+  var primerDia = o.hoy.substring(0, 8) + '01';
+
+  $('contenido').innerHTML =
+    '<div class="fila-campos" style="margin-bottom:4px">' +
+      '<div class="campo" style="flex:2 1 280px"><label for="repSel">Reporte</label>' +
+        '<select id="repSel">' + o.reportes.map(function (r) {
+          return '<option value="' + r.clave + '"' + (r.clave === def.clave ? ' selected' : '') + '>' +
+                 esc(r.nombre) + '</option>';
+        }).join('') + '</select></div>' +
+    '</div>' +
+    '<p class="pista" style="margin:0 0 14px">' + esc(def.descripcion) + '</p>' +
+
+    '<div class="tarjeta" style="padding:16px;margin-bottom:16px">' +
+      '<div class="fila-campos">' +
+        (tiene('desde') ? '<div class="campo"><label for="repDesde">Desde</label>' +
+          '<input id="repDesde" type="date" value="' + primerDia + '"></div>' : '') +
+        (tiene('hasta') ? '<div class="campo"><label for="repHasta">Hasta</label>' +
+          '<input id="repHasta" type="date" value="' + o.hoy + '"></div>' : '') +
+        (tiene('idArea') ? '<div class="campo"><label for="repArea">Juzgado</label>' +
+          '<select id="repArea">' + opciones(o.areas, 'Todos') + '</select></div>' : '') +
+        (tiene('idPersonal') ? '<div class="campo"><label for="repPersona">Persona</label>' +
+          '<select id="repPersona">' + opciones(o.personal, 'Todas') + '</select></div>' : '') +
+        (tiene('idTurno') ? '<div class="campo"><label for="repTurno">Turno</label>' +
+          '<select id="repTurno">' + opciones(o.turnos, 'Todos') + '</select></div>' : '') +
+        (tiene('idTipoDia') ? '<div class="campo"><label for="repTipo">Tipo de día</label>' +
+          '<select id="repTipo">' + opciones(o.tiposDia, 'Todos') + '</select></div>' : '') +
+        (tiene('estado') ? '<div class="campo"><label for="repEstado">Estado</label>' +
+          '<input id="repEstado" type="text" placeholder="Cualquiera"></div>' : '') +
+      '</div>' +
+      '<div class="pie-panel">' +
+        '<button class="btn primario" id="btnGenerar">Generar</button>' +
+        '<button class="btn" id="btnCsv" disabled>Descargar CSV</button>' +
+      '</div>' +
+    '</div>' +
+    '<div id="repSalida"></div>';
+
+  $('repSel').addEventListener('change', function () {
+    S.repClave = this.value;
+    pintarReportes();
+  });
+  $('btnGenerar').addEventListener('click', generarReporte);
+  $('btnCsv').addEventListener('click', descargarReporte);
+}
+
+function filtrosReporte() {
+  var f = {};
+  if ($('repDesde')) { f.desde = $('repDesde').value; }
+  if ($('repHasta')) { f.hasta = $('repHasta').value; }
+  if ($('repArea')) { f.idArea = $('repArea').value; }
+  if ($('repPersona')) { f.idPersonal = $('repPersona').value; }
+  if ($('repTurno')) { f.idTurno = $('repTurno').value; }
+  if ($('repTipo')) { f.idTipoDia = $('repTipo').value; }
+  if ($('repEstado')) { f.estado = $('repEstado').value.trim(); }
+  return f;
+}
+
+function generarReporte() {
+  var b = $('btnGenerar');
+  b.disabled = true;
+  b.textContent = 'Generando…';
+  $('repSalida').innerHTML = '<div class="cargando">Consultando…</div>';
+
+  api('generarReporte', { clave: S.repClave, filtros: filtrosReporte() }).then(function (r) {
+    b.disabled = false;
+    b.textContent = 'Generar';
+    $('btnCsv').disabled = (r.total === 0);
+    pintarSalidaReporte(r);
+  }).catch(function (e) {
+    b.disabled = false;
+    b.textContent = 'Generar';
+    $('repSalida').innerHTML = '';
+    if (!e.sinSesion) { mensaje(e.message, 'error'); }
+  });
+}
+
+function pintarSalidaReporte(r) {
+  if (!r.total) {
+    $('repSalida').innerHTML = '<div class="vacio"><p>Sin resultados con esos filtros.</p></div>';
+    return;
+  }
+
+  var html = '';
+  if (r.resumen && r.resumen.length) {
+    html += '<div class="tarjetas">' + r.resumen.map(function (x) {
+      return tarjeta(x.etiqueta, x.valor, '');
+    }).join('') + '</div>';
+  }
+
+  // Se muestran 300 filas: más no se leen en pantalla y ralentizan el navegador.
+  // El CSV descarga siempre el total.
+  var visibles = r.filas.slice(0, 300);
+  html += '<div class="tarjeta tabla-ancha"><table class="datos"><thead><tr>' +
+    r.columnas.map(function (c) { return '<th>' + esc(c) + '</th>'; }).join('') +
+    '</tr></thead><tbody>' +
+    visibles.map(function (fila) {
+      return '<tr style="cursor:default">' + fila.map(function (v, i) {
+        var mono = /^[\d.,:-]*$/.test(String(v)) && String(v) !== '';
+        return '<td' + (mono ? ' class="mono"' : '') + '>' + esc(v) + '</td>';
+      }).join('') + '</tr>';
+    }).join('') + '</tbody></table></div>' +
+    '<p class="pista" style="margin-top:10px">' + r.total + ' fila(s)' +
+    (r.total > 300 ? ' · se muestran las primeras 300; el CSV incluye todas' : '') +
+    ' · generado ' + esc(r.generado) + '</p>';
+
+  $('repSalida').innerHTML = html;
+}
+
+/**
+ * Descarga el CSV. El panel corre dentro de un iframe con restricciones, así que
+ * si el navegador bloquea la descarga se ofrece el contenido para copiar: es
+ * preferible a dejar a la persona sin salida.
+ */
+function descargarReporte() {
+  var b = $('btnCsv');
+  b.disabled = true;
+  b.textContent = 'Preparando…';
+
+  api('exportarReporte', { clave: S.repClave, filtros: filtrosReporte() }).then(function (r) {
+    b.disabled = false;
+    b.textContent = 'Descargar CSV';
+    try {
+      // El BOM hace que Excel reconozca los acentos.
+      var blob = new Blob(['\uFEFF' + r.contenido], { type: 'text/csv;charset=utf-8;' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = r.nombre;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+      mensaje('Descargando ' + r.nombre + ' (' + r.filas + ' filas).');
+    } catch (err) {
+      mostrarCsvParaCopiar(r);
+    }
+  }).catch(function (e) {
+    b.disabled = false;
+    b.textContent = 'Descargar CSV';
+    if (!e.sinSesion) { mensaje(e.message, 'error'); }
+  });
+}
+
+function mostrarCsvParaCopiar(r) {
+  var host = document.createElement('div');
+  host.className = 'modal-host';
+  host.innerHTML =
+    '<div class="modal-velo"></div>' +
+    '<div class="modal" style="max-width:640px">' +
+      '<h3>' + esc(r.nombre) + '</h3>' +
+      '<p>El navegador bloqueó la descarga. Copia el contenido y pégalo en un archivo ' +
+      'de texto o directamente en una hoja de cálculo.</p>' +
+      '<textarea id="csvTexto" style="width:100%;height:220px;font-family:var(--mono);font-size:11px"></textarea>' +
+      '<div class="modal-pie">' +
+        '<button class="btn" data-accion="no">Cerrar</button>' +
+        '<button class="btn primario" data-accion="copiar">Copiar</button>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(host);
+  host.querySelector('#csvTexto').value = r.contenido;
+
+  var cerrar = function () { host.remove(); };
+  host.querySelector('.modal-velo').addEventListener('click', cerrar);
+  host.querySelector('[data-accion="no"]').addEventListener('click', cerrar);
+  host.querySelector('[data-accion="copiar"]').addEventListener('click', function () {
+    var t = host.querySelector('#csvTexto');
+    t.select();
+    try { document.execCommand('copy'); mensaje('Copiado al portapapeles.'); }
+    catch (e) { mensaje('Selecciona el texto y cópialo con Ctrl+C.', 'error'); }
   });
 }
 
