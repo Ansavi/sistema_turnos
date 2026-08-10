@@ -70,8 +70,29 @@ function api(accion, datos, token) {
     if (!manejador) { throw new Error('Acción no reconocida: ' + accion); }
     return { ok: true, datos: manejador(ctx, datos) };
   } catch (err) {
-    console.error(accion + ': ' + err.stack);
-    return { ok: false, error: err.message };
+    /**
+     * Un error sin mensaje deja a la persona sin nada que hacer y a quien da
+     * soporte sin nada que buscar. Aquí se garantiza que siempre haya texto y un
+     * código de incidente con el que localizar el detalle en el registro.
+     */
+    var incidente = 'INC-' + Utilities.getUuid().substring(0, 6).toUpperCase();
+    var detalle = (err && err.message) ? err.message
+                : (err && err.name) ? err.name
+                : String(err || 'fallo sin descripción');
+
+    console.error('[' + incidente + '] acción "' + accion + '" · usuario ' +
+                  (ctx.correo || '?') + '\n' + detalle + '\n' +
+                  ((err && err.stack) ? err.stack : 'sin traza'));
+
+    Auditoria_.registrar(ctx, 'ERROR', accion, incidente, '', '', '', 'FALLO',
+      detalle.substring(0, 300));
+
+    return {
+      ok: false,
+      error: detalle,
+      incidente: incidente,
+      accion: accion
+    };
   }
 }
 
@@ -138,7 +159,7 @@ var ENRUTADOR_ = {
         puedeAnular: Permisos_.puedeTabla(ctx, k, 'ANULAR'),
         campos: d.campos.map(function (f) {
           return { c: f.c, t: f.t, req: !!f.req, ops: f.ops || null, ref: f.ref || null,
-                   pk: !!f.pk, calculado: !!f.calculado };
+                   pk: !!f.pk, calculado: !!f.calculado, auditoria: !!f.auditoria };
         })
       };
     });
